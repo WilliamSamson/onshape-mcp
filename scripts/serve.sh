@@ -1,18 +1,7 @@
 #!/bin/bash
-# One-shot server launcher. Replaces:
-#   cd ~/Codes/onshape-mcp
-#   source .venv/bin/activate
-#   python3 -m onshape_mcp.server
-#
-# Usage:
-#   ./scripts/serve.sh           # foreground (Ctrl+C to stop)
-#
-# Why no --background: MCP servers speak stdio JSON-RPC, so they need
-# a live stdin/stdout pair attached to an MCP client. Backgrounding with
-# stdin closed makes the server exit immediately. To leave the server
-# running while you do other things, run this in a separate terminal
-# (tmux, screen, or just another tab). To call it from a script, pipe
-# JSON-RPC messages in via stdin.
+# One-shot launcher. Two modes:
+#   ./scripts/serve.sh             # MCP stdio server (for Claude Code, Cursor, …)
+#   ./scripts/serve.sh web         # Gemini-MCP web client on http://127.0.0.1:8765
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -26,4 +15,9 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
+if [ "${1:-}" = "web" ]; then
+  exec python3 scripts/web_client.py
+fi
+
 exec python3 -m onshape_mcp.server
+

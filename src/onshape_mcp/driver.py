@@ -122,10 +122,11 @@ class OnshapeDriver:
         return getattr(self, "_channel_used", "unknown")
 
     async def open(self, url: str = ONSHAPE_URL) -> None:
-        # Onshape is a SPA. domcontentloaded fires before the WebGL canvas
-        # has rendered, so wait for the network to go idle (the app's API
-        # calls all settle) and then a beat more.
-        await self.page.goto(url, wait_until="networkidle", timeout=60_000)
+        # Onshape is a SPA that keeps WebSocket connections open, so
+        # `networkidle` never fires (it would time out at 60s). We use
+        # `load` for the navigation then `wait_for_app()` to confirm the
+        # toolbar is actually on screen.
+        await self.page.goto(url, wait_until="load", timeout=60_000)
         await self.wait_for_app()
 
     # ─── screenshots ─────────────────────────────────────────────────────
