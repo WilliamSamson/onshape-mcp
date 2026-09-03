@@ -1,10 +1,9 @@
-"""Playwright driver for Onshape web.
+"""Playwright driver for Onshape. One headless Chromium, persistent
+profile so I stay logged in across runs. Profile dir is gitignored
+(see SECURITY.md).
 
-Single headless Chromium instance, persistent profile so the user stays
-logged in across runs. The profile dir is gitignored — see SECURITY.md.
-
-This module holds the *lowest-level* UI primitives. Higher-level Onshape
-ops (sketch, extrude, fillet) live in `ui_actions.py` and compose these.
+This module holds the lowest-level UI primitives. Higher-level Onshape
+ops (sketch, extrude, fillet) live in ui_actions.py and compose these.
 """
 
 from __future__ import annotations
@@ -43,7 +42,7 @@ class OnshapeDriver:
     @property
     def page(self) -> Page:
         if self._page is None:
-            raise RuntimeError("Driver not started — call .start() first")
+            raise RuntimeError("Driver not started; call .start() first")
         return self._page
 
     async def open(self, url: str = ONSHAPE_URL) -> None:

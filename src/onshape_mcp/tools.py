@@ -1,12 +1,8 @@
-"""The Onshape tool datasheet — the boring 80% of the work.
+"""Onshape tool datasheet. One entry per semantic op the agent can call.
+The actual clicks live in ui_actions.py / driver.py. This file is the
+vocabulary the LLM sees via the `tool_datasheet` MCP tool.
 
-Each entry is one *semantic* op the agent can perform. The actual low-level
-clicks live in driver.py. This file is the vocabulary the LLM uses.
-
-Status legend:
-  planned  - not yet wired up
-  stub     - registered but raises NotImplementedError
-  working  - tested manually
+Status flags: planned, stub, working.
 """
 
 from __future__ import annotations
@@ -223,7 +219,7 @@ def as_prompt_block() -> str:
     """Render the datasheet as a compact prompt block for the LLM."""
     lines = ["# Onshape tool vocabulary", ""]
     for t in ALL_TOOLS:
-        bits = [f"**{t.name}** — {t.purpose}"]
+        bits = [f"**{t.name}** {t.purpose}"]
         if t.requires:
             bits.append(f"  requires: {', '.join(t.requires)}")
         if t.produces:

@@ -1,13 +1,11 @@
-"""Onshape UI bindings — keyboard shortcuts and toolbar button labels.
+"""Onshape UI bindings. Keyboard shortcuts and toolbar button labels.
 
-This is the bridge between our semantic tool vocabulary (tools.py) and the
-actual UI. Onshape changes this occasionally; when an action fails, this
-is the first place to check.
+This is the bridge between the semantic tool vocabulary in tools.py and
+the actual UI. Onshape changes this occasionally; when an action fails,
+this is the first place to check.
 
-Confidence legend:
-  high   - tested, or well-documented by Onshape
-  medium - plausible, not yet verified
-  low    - guess based on convention; may need correction
+Confidence flags: high (tested or well-documented), medium (plausible,
+not yet verified), low (guess based on convention).
 """
 
 from __future__ import annotations
@@ -32,9 +30,9 @@ VIEW_FRONT = Binding(keys=("1",), confidence="low")
 VIEW_ISO = Binding(keys=("F2",), confidence="low")
 
 # ─── sketching ────────────────────────────────────────────────────────────
-# In Onshape, the sketch tools live in the left toolbar; you click the tool
-# then click in the viewport. There isn't a universal keyboard shortcut for
-# "start sketch" — you click the sketch button or the plane, then the tool.
+# Onshape sketch tools: you click the tool in the left toolbar, then click
+# in the viewport. There isn't a universal "start sketch" shortcut. You
+# click the sketch button or a plane, then a tool.
 SKETCH_START = Binding(
     toolbar_text="Sketch",
     toolbar_role="button",
@@ -130,8 +128,8 @@ BINDINGS: dict[str, Binding] = {
     "feature.mirror_body": FEATURE_MIRROR_BODY,
     "assembly.mate": ASSEMBLY_MATE,
     "assembly.pattern": ASSEMBLY_PATTERN,
-    # Selection is just a click — no shortcut or button. The binding is
-    # the act of clicking a coordinate in the viewport; ui_actions handles it.
+    # Selection is just a click. No shortcut or button. The binding is the
+    # act of clicking a coordinate in the viewport; ui_actions handles it.
     "select.face": Binding(notes="Click in viewport at (x,y); ui_actions handles the click.", confidence="high"),
     "select.edge": Binding(notes="Click in viewport at (x,y).", confidence="high"),
     "select.body": Binding(notes="Click in viewport or in the feature tree.", confidence="high"),

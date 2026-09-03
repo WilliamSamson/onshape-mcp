@@ -1,17 +1,9 @@
-"""Gemini web client. Uses your Google AI Plus cookies — no API key.
+"""Gemini web client. Cookie-auth, no API key. Cookie file is gitignored
+(see SECURITY.md). Cookie file format: {"secure_1psid": ..., "secure_1psidts": ...}.
 
-The cookie file is gitignored. See SECURITY.md.
-
-Expected format (export from a browser extension like `cookies.txt`):
-
-    {
-      "secure_1psid": "...",
-      "secure_1psidts": "..."
-    }
-
-We try `gemini-webapi` first (it handles the auth dance). If the package
-shape has shifted (it does, frequently), we fall back to a raw httpx
-implementation. Pin and verify on every install.
+I tried to keep the wrapper thin. The `gemini-webapi` package handles the
+auth dance but its surface shifts often, so pin and verify on every
+install.
 """
 
 from __future__ import annotations
@@ -36,8 +28,8 @@ class GeminiWeb:
         psidts = data.get("secure_1psidts") or data.get("__Secure-1PSIDTS")
         if not (psid and psidts):
             raise ValueError(
-                f"Cookie file {self.cookie_file} missing secure_1psid / "
-                f"secure_1psidts — re-export from your browser."
+                f"Cookie file {self.cookie_file} missing secure_1psid or "
+                f"secure_1psidts. Re-export from your browser."
             )
         return psid, psidts
 

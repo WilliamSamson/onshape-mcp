@@ -1,7 +1,6 @@
-"""MCP server entrypoint. Exposes the Onshape tool vocabulary as MCP tools.
-
-The actual UI ops live in `ui_actions.py` and use the `driver.py` primitives.
-Every call goes through the `journal` so undo/replay/debug work.
+"""MCP server. Exposes the Onshape tool vocabulary as MCP tools. UI ops
+live in ui_actions.py and use the driver.py primitives. Every call goes
+through the journal so undo/replay/debug work.
 """
 
 from __future__ import annotations
@@ -217,7 +216,7 @@ def _build_agent_system_prompt() -> str:
         "arguments as a JSON object matching its signature.\n"
         "  4. If you have completed the goal, return {\"done\": true, \"summary\": \"...\"}.\n\n"
         "Be conservative. When in doubt, take a screenshot and re-look. The UI "
-        "is fragile — wrong clicks can deselect, dismiss dialogs, or trigger "
+        "is fragile: wrong clicks can deselect, dismiss dialogs, or trigger "
         "unrelated tools.\n\n"
         "Coordinate space: viewport pixels (0,0 = top-left). Use the "
         "`viewport_size` tool if you need the bounds.\n\n"
@@ -306,10 +305,9 @@ def _parse_decision(text: str) -> dict[str, Any]:
 
 async def _dispatch(d: OnshapeDriver, tool: str | None, args: dict[str, Any]) -> None:
     """Route a tool call from the LLM into the right ui_actions function.
-
-    Args are accepted in a flat shape from the model and adapted to the
-    function signatures. Unknown tools raise — the LLM should not call
-    things not in the datasheet.
+    Args come in flat from the model and are reshaped to function
+    signatures. Unknown tools raise; the LLM shouldn't call things that
+    aren't in the datasheet.
     """
     if not tool:
         return

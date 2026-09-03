@@ -1,4 +1,4 @@
-"""Configuration loaded from .env (which is gitignored — see SECURITY.md)."""
+"""Configuration loaded from .env. The .env file is gitignored (see SECURITY.md)."""
 
 from __future__ import annotations
 

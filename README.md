@@ -1,21 +1,55 @@
 # onshape-mcp
 
-A visual, agentic MCP server for **Onshape**. You give it a goal in natural
-language, it drives the Onshape web UI the way a human would — clicking faces,
-drawing sketches, extruding, chamfering — using a vision-capable LLM
-(Gemini web) for eyes and reasoning, and Playwright for hands.
+I wanted a way to drive Onshape from a language model the way I drive it with
+my hands. Click a face. Draw a sketch. Extrude. Chamfer. The existing Onshape
+MCP wraps the REST API and FeatureScript, which works but feels like coding,
+not modeling. This server aims at the other 70% of CAD work that lives in
+the viewport.
 
-No FeatureScript black box. Every action is logged and reversible. Every pick
-is a real click on a real face. Undo works because we journaled every step.
+It uses a vision-capable LLM (Gemini web, no API key, my Plus cookies) as
+eyes, Playwright as hands, and an MCP surface so any MCP-aware client can
+talk to it. Every action is journaled, so I can undo, replay, or branch.
 
-## Why
+## Status
 
-The existing Onshape MCP wraps the REST API + FeatureScript. That's reliable
-but feels like coding, not modeling. This server aims for the other 70% of
-CAD work that lives in the viewport: pick a face, drag a dimension, mirror a
-feature, mate this to that.
+- **M0** done: scaffold, smoke tests, public repo, safety rails.
+- **M1** done: driver primitives, Onshape tool datasheet, 10 wired tools
+  (`view.fit`, `sketch.start/rectangle/circle/line/exit`, `feature.extrude/fillet/chamfer`,
+  `select.face/edge`, `ui.undo/redo`), closed-loop `act(goal)` agent.
+- **M2** next: pattern, mirror_body, assembly.mate, sketch.constrain flyout,
+  journal-replay undo, a real perceptual-diff for the stuck detector.
 
-## Architecture (one screen)
+## What it looks like from the client side
+
+Two ways to drive it:
+
+**Direct tools.** I call individual MCP tools when I want fine control:
+`screenshot`, `describe_view`, `viewport_size`, `journal_tail`, `tool_datasheet`,
+`open_doc`, and the per-tool `onshape_*` ones. Useful when I want to see
+each step and steer.
+
+**Closed-loop `act`.** I just say what I want:
+`act(goal="draw a 50x30mm rectangle on the top plane and extrude it 10mm")`.
+Gemini sees each screenshot, picks the next tool, calls it, repeats until
+the goal is met or it bails. Bounded by `max_steps` (default 25) and a
+stuck detector (3 identical screenshots in a row = stop).
+
+## How I run it
+
+```bash
+# one-shot bootstrap
+python scripts/bootstrap.py
+
+# then start the server
+source .venv/bin/activate
+python -m onshape_mcp.server
+```
+
+`bootstrap.py` does the venv, the pip install, the Chromium download, the
+cookie extraction, the Onshape login, and the M0 sanity checks. Re-run it
+any time; it's idempotent.
+
+## Architecture in one screen
 
 ```
                 ┌────────────────────────────────────────┐
@@ -36,53 +70,25 @@ feature, mate this to that.
                         │
                 ┌───────▼────────┐
                 │  Onshape web   │
-                │  (cad.onshape.com) │
                 └────────────────┘
 ```
 
-## Status
+Five layers, bottom up:
 
-✅ **M0** — scaffolding, smoke tests, public repo.
-🚧 **M1** — first 10 datasheet tools wired against Playwright + Gemini web
-closed-loop `act(goal)`. Targets: draw a rectangle, extrude it, add a chamfer.
-Targets for **M2**: pattern, mirror_body, assembly.mate, journal-replay undo.
-
-## Quick start
-
-```bash
-git clone https://github.com/WilliamSamson/onshape-mcp
-cd onshape-mcp
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-cp .env.example .env
-# Edit .env with your Gemini cookie path, etc.
-
-# 1. Log into Onshape once (saves session to playwright-profile/)
-python -m onshape_mcp.driver login
-
-# 2. Verify Gemini web works with your cookies
-python scripts/m0_gemini.py some-image.png
-
-# 3. Run the MCP server
-python -m onshape_mcp.server
-```
-
-Then point your MCP client at it. The two tool surfaces:
-
-- **Direct** — `screenshot`, `describe_view`, `viewport_size`, `journal_tail`,
-  `tool_datasheet`, `open_doc`, and the per-tool `onshape_*` tools. Use these
-  when you want to drive the loop yourself.
-- **Agentic** — `act(goal="draw a 50x30mm rectangle and extrude it 10mm")`
-  lets Gemini web run the closed loop for you, bounded by `max_steps` and
-  a stuck detector.
-
-## Safety
-
-Public repo — see [SECURITY.md](SECURITY.md). No credentials, cookies, logs,
-or screenshots of your documents are ever committed. All sensitive paths are
-gitignored from day one.
+1. **Driver primitives** in `driver.py`. Click, type, press chord, drag,
+   find by text, screenshot. Knows nothing about Onshape.
+2. **UI bindings** in `shortcuts.py`. Maps each semantic tool to its
+   keyboard chord or toolbar button, with a `confidence` flag so I know
+   what to retest.
+3. **UI actions** in `ui_actions.py`. Compose primitives + bindings into
+   one logical op (`sketch_rectangle(d, c1, c2)` = activate tool, click
+   c1, click c2, Esc, screenshot). Every op journals itself.
+4. **Dispatch table** in `server.py`. Maps tool names back to ui_actions
+   functions, flattens LLM-friendly args to tuples.
+5. **Agent loop** `act(goal)` in `server.py`. Screenshot, ask Gemini
+   what's next, dispatch, repeat. Bounded by `max_steps` and a stuck
+   detector.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

@@ -1,16 +1,10 @@
-"""High-level Onshape operations — the real M1 work.
+"""High-level Onshape operations. Each public function corresponds to a
+datasheet tool. Uses driver.py primitives + shortcuts.py bindings, journals
+to journal.py. Raises before touching the UI if a precondition isn't met.
 
-Each public function corresponds to a datasheet tool. It uses `driver.py`
-primitives + `shortcuts.py` bindings to perform the op, with `journal.py`
-recording the attempt. If a precondition isn't met, it raises before
-touching the UI.
-
-Conventions:
-  - All functions return a `Result` dict with `ok`, `note`, optional `screenshot`.
-  - All functions take the driver explicitly (no global state) so the loop
-    can be tested without spinning up a browser.
-  - Coordinates passed in are viewport pixel coords. Use `driver.viewport_box()`
-    to know the bounds.
+Conventions: every function takes the driver explicitly (no globals), returns
+a `Result` dict, and uses viewport pixel coords. Call `driver.viewport_box()`
+to get bounds.
 """
 
 from __future__ import annotations
@@ -195,8 +189,8 @@ async def sketch_exit(d: OnshapeDriver) -> Result:
 # ─── features ─────────────────────────────────────────────────────────────
 
 async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Result:
-    """Extrude the active sketch region. If depth is None, we just open the
-    extrude dialog and screenshot — the LLM loop can then type a value.
+    """Extrude the active sketch region. If depth is None, opens the
+    extrude dialog and screenshots so the LLM loop can type a value.
     """
     b = binding_for("feature.extrude")
     if b.toolbar_text:
@@ -260,8 +254,8 @@ async def feature_chamfer(d: OnshapeDriver, distance_mm: float | None = None) ->
 # ─── selection ────────────────────────────────────────────────────────────
 
 async def select_face(d: OnshapeDriver, x: float, y: float) -> Result:
-    """Click in the viewport to select a face. Best-effort — the face at
-    that pixel may not be what was intended; the LLM loop verifies via
+    """Click in the viewport to select a face. Best-effort: the face at
+    that pixel may not be what was intended, so the LLM loop verifies via
     screenshot."""
     await d.click(x, y)
     await asyncio.sleep(0.2)

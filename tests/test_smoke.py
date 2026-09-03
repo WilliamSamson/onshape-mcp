@@ -1,4 +1,4 @@
-"""Smoke tests — no browser, no network, no LLM. Just shape and logic."""
+"""Smoke tests. No browser, no network, no LLM. Just shape and logic."""
 
 from __future__ import annotations
 
