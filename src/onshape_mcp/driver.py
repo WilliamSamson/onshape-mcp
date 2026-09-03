@@ -22,20 +22,43 @@ ONSHAPE_URL = "https://cad.onshape.com"
 class OnshapeDriver:
     def __init__(self, profile_dir: Path | None = None) -> None:
         self.profile_dir = (profile_dir or settings.onshape_browser_profile).resolve()
+        self.channel = settings.browser_channel
         self._pw: Any = None
         self._ctx: BrowserContext | None = None
         self._page: Page | None = None
 
     async def start(self, headless: bool = True) -> Page:
         self._pw = await async_playwright().start()
-        # Persistent context: cookies + local storage live on disk,
-        # so a single `login` keeps you signed in forever.
-        self._ctx = await self._pw.chromium.launch_persistent_context(
+        # Persistent context keeps cookies + local storage on disk so a
+        # single `login` keeps us signed in forever.
+        #
+        # Channel strategy: try real Chrome first (no automation markers,
+        # dodges Google's "this browser may not be secure" block, looks
+        # like a normal human session). Fall back to bundled Chromium if
+        # Chrome isn't installed. Set ONSHAPE_BROWSER_CHANNEL=chromium
+        # to skip the Chrome attempt (e.g. on a Pi with no Chrome).
+        common = dict(
             user_data_dir=str(self.profile_dir),
             headless=headless,
             viewport={"width": 1440, "height": 900},
+        )
+        if self.channel in ("auto", "chrome"):
+            try:
+                self._ctx = await self._pw.chromium.launch_persistent_context(
+                    **common, channel="chrome"
+                )
+                self._channel_used = "chrome"
+                self._page = await self._ctx.new_page()
+                return self._page
+            except Exception as e:
+                if self.channel == "chrome":
+                    raise
+                print(f"[driver] real Chrome unavailable ({e}); using bundled Chromium")
+        self._ctx = await self._pw.chromium.launch_persistent_context(
+            **common,
             args=["--disable-blink-features=AutomationControlled"],
         )
+        self._channel_used = "chromium"
         self._page = await self._ctx.new_page()
         return self._page
 
@@ -44,6 +67,10 @@ class OnshapeDriver:
         if self._page is None:
             raise RuntimeError("Driver not started; call .start() first")
         return self._page
+
+    @property
+    def channel_used(self) -> str:
+        return getattr(self, "_channel_used", "unknown")
 
     async def open(self, url: str = ONSHAPE_URL) -> None:
         await self.page.goto(url, wait_until="domcontentloaded")

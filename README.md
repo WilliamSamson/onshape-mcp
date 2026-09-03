@@ -37,12 +37,12 @@ stuck detector (3 identical screenshots in a row = stop).
 ## How I run it
 
 ```bash
-# one-shot bootstrap
-python scripts/bootstrap.py
+# one-shot bootstrap (use python3 explicitly, "python" is not always aliased)
+python3 scripts/bootstrap.py
 
 # then start the server
 source .venv/bin/activate
-python -m onshape_mcp.server
+python3 -m onshape_mcp.server
 ```
 
 `bootstrap.py` does the venv, the pip install, the Chromium download, the
@@ -60,8 +60,11 @@ somehow fails (Chrome locked, no Chrome installed), it falls back to
 launching real Chrome via Playwright (`channel="chrome"`), and only as
 a last resort launches bundled Chromium.
 
-If you only use Firefox or another browser, install Chrome once and log
-into Gemini in it. The script reads the cookies from there.
+The same Chrome-first choice applies to the main driver. Set
+`ONSHAPE_BROWSER_CHANNEL=auto` (the default) and the server uses real
+Chrome when available, falling back to bundled Chromium. Set it to
+`chromium` to skip the Chrome attempt (e.g. on a Pi with no Chrome
+installed).
 
 ## Architecture in one screen
 

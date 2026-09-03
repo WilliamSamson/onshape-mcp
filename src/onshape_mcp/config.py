@@ -29,10 +29,14 @@ class Settings:
     log_dir: Path = _path("LOG_DIR", "./logs")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
     onshape_default_doc: str = os.getenv("ONSHAPE_DEFAULT_DOC", "")
+    # "auto" tries real Chrome first then bundled Chromium,
+    # "chrome" requires real Chrome, "chromium" skips the Chrome attempt.
+    browser_channel: str = os.getenv("ONSHAPE_BROWSER_CHANNEL", "auto")
 
     def __repr__(self) -> str:  # never leak cookie/profile paths into logs
         return (
             f"Settings(gemini_model={self.gemini_model!r}, "
+            f"browser_channel={self.browser_channel!r}, "
             f"onshape_default_doc={self.onshape_default_doc!r})"
         )
 

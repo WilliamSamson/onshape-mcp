@@ -139,7 +139,11 @@ def main() -> None:
     _onshape_login()
     _m0_sanity()
 
-    print("\n[bootstrap] done. next: source .venv/bin/activate && python -m onshape_mcp.server")
+    print(
+        "\n[bootstrap] done. next:\n"
+        "  source .venv/bin/activate\n"
+        "  python3 -m onshape_mcp.server"
+    )
 
 
 if __name__ == "__main__":
