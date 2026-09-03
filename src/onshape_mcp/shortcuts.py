@@ -48,7 +48,13 @@ SKETCH_RECTANGLE = Binding(
 SKETCH_CIRCLE = Binding(toolbar_text="Circle", toolbar_role="button", confidence="high")
 SKETCH_LINE = Binding(toolbar_text="Line", toolbar_role="button", confidence="high")
 SKETCH_SPLINE = Binding(toolbar_text="Spline", toolbar_role="button", confidence="medium")
-SKETCH_DIMENSION = Binding(keys=("d",), confidence="medium", notes="In a sketch only.")
+SKETCH_DIMENSION = Binding(
+    keys=("d",),
+    toolbar_text="Dimension",
+    toolbar_role="button",
+    confidence="medium",
+    notes="In a sketch only. Workflow: activate, click the entity to dimension, click where to place the label, type the value, press Enter.",
+)
 SKETCH_MIRROR = Binding(toolbar_text="Mirror", toolbar_role="button", confidence="medium")
 SKETCH_EXIT = Binding(
     keys=("Escape",),
@@ -111,6 +117,12 @@ BINDINGS: dict[str, Binding] = {
     "sketch.line": SKETCH_LINE,
     "sketch.spline": SKETCH_SPLINE,
     "sketch.dimension": SKETCH_DIMENSION,
+    "sketch.equal": Binding(
+        toolbar_text="Equal",
+        toolbar_role="button",
+        notes="Equality constraint, makes two selected entities the same size. Useful for 'make this a square'.",
+        confidence="medium",
+    ),
     "sketch.constrain": Binding(
         toolbar_text="Coincident",  # default; many sub-tools in the flyout
         toolbar_role="button",

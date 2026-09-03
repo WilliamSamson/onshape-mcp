@@ -175,6 +175,85 @@ async def sketch_line(
     return r
 
 
+async def sketch_dimension(
+    d: OnshapeDriver,
+    entity_xy: tuple[float, float],
+    label_xy: tuple[float, float],
+    value_mm: float,
+) -> Result:
+    """Add or set a dimension. Click the entity at `entity_xy`, place the
+    dimension label at `label_xy`, then type the new value + Enter.
+
+    This is the workhorse of the "make it 5x5" workflow. Draw any
+    rectangle, then call this twice (once for each side) with the
+    target mm value. The LLM doesn't need to know the px-to-mm ratio
+    because Onshape's solver does the conversion.
+    """
+    b = binding_for("sketch.dimension")
+    if b.toolbar_text:
+        ok = await d.click_text(b.toolbar_text, timeout_ms=3000)
+        if not ok and b.keys:
+            await d.press_chord(*b.keys)
+        else:
+            if not ok:
+                return Result(False, f"sketch.dimension: toolbar {b.toolbar_text!r} not found")
+    elif b.keys:
+        await d.press_chord(*b.keys)
+    else:
+        return Result(False, "sketch.dimension: no binding")
+    await asyncio.sleep(0.2)
+    # Click the entity (line/edge/circle) to dimension
+    await d.click(*entity_xy)
+    await asyncio.sleep(0.15)
+    # Click where to place the dimension label
+    await d.click(*label_xy)
+    await asyncio.sleep(0.2)
+    # Type the new value, press Enter
+    await d.type_text(str(value_mm))
+    await d.press_key("Enter")
+    await asyncio.sleep(0.2)
+    # Esc to drop the dimension tool, stay in sketch
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_dimension.png")
+    r = Result(
+        True,
+        f"dimensioned {value_mm}mm at {entity_xy}",
+        shot,
+        {"value_mm": value_mm},
+    )
+    _record(
+        "sketch.dimension",
+        {"entity_xy": list(entity_xy), "label_xy": list(label_xy), "value_mm": value_mm},
+        r,
+    )
+    return r
+
+
+async def sketch_equal(d: OnshapeDriver, *entity_xys: tuple[float, float]) -> Result:
+    """Apply the Equal constraint to make two or more entities the same size.
+
+    Workflow: activate Equal tool, click each entity in turn, press Esc.
+    The LLM passes N coordinates (each on an entity to be made equal).
+    """
+    if len(entity_xys) < 2:
+        return Result(False, "sketch.equal needs at least 2 entities")
+    b = binding_for("sketch.equal")
+    if b.toolbar_text is None:
+        return Result(False, "sketch.equal: no binding")
+    ok = await d.click_text(b.toolbar_text, timeout_ms=3000)
+    if not ok:
+        return Result(False, f"sketch.equal: toolbar {b.toolbar_text!r} not found")
+    await asyncio.sleep(0.2)
+    for xy in entity_xys:
+        await d.click(*xy)
+        await asyncio.sleep(0.1)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_equal.png")
+    r = Result(True, f"equal across {len(entity_xys)} entities", shot)
+    _record("sketch.equal", {"entities": [list(xy) for xy in entity_xys]}, r)
+    return r
+
+
 async def sketch_exit(d: OnshapeDriver) -> Result:
     """Exit the active sketch. Presses Esc and verifies by screenshot diff."""
     before = await d.screenshot("sketch_exit_before.png")

@@ -8,6 +8,11 @@ import pytest
 
 from onshape_mcp import tools as datasheet
 from onshape_mcp.config import Settings
+from onshape_mcp.dispatch import (
+    TOOL_DISPATCH,
+    build_agent_system_prompt,
+    parse_decision,
+)
 from onshape_mcp.journal import Journal, JournalEntry
 from onshape_mcp.shortcuts import BINDINGS, get as binding_for
 
@@ -27,12 +32,8 @@ def test_datasheet_lookup() -> None:
 
 
 def test_every_datasheet_tool_has_a_binding() -> None:
-    """If a tool is in the datasheet, it should be in shortcuts too. If not,
-    the agent will try to call it and crash."""
     missing = []
     for t in datasheet.ALL_TOOLS:
-        # We only require bindings for tools that have a real UI presence.
-        # Doc/meta + assembly.pattern are M2.
         requires_binding = not t.name.startswith("doc.")
         if requires_binding and t.name not in BINDINGS:
             missing.append(t.name)
@@ -54,44 +55,38 @@ def test_settings_redacts_paths() -> None:
     rep = repr(s)
     assert "playwright-profile" not in rep
     assert "gemini.cookies.json" not in rep
+    assert "onshape.cookies.json" not in rep
 
 
 def test_parse_decision_clean_json() -> None:
-    from onshape_mcp.server import _parse_decision
-    out = _parse_decision('{"tool": "view.fit", "args": {}}')
+    out = parse_decision('{"tool": "view.fit", "args": {}}')
     assert out == {"tool": "view.fit", "args": {}}
 
 
 def test_parse_decision_fenced_json() -> None:
-    from onshape_mcp.server import _parse_decision
     text = (
         "Sure, here's the call:\n"
         "```json\n"
         '{"tool": "sketch.rectangle", "args": {"corner1_x": 10, "corner1_y": 10, "corner2_x": 100, "corner2_y": 60}}\n'
         "```\n"
     )
-    out = _parse_decision(text)
+    out = parse_decision(text)
     assert out["tool"] == "sketch.rectangle"
     assert out["args"]["corner1_x"] == 10
 
 
 def test_parse_decision_done_marker() -> None:
-    from onshape_mcp.server import _parse_decision
-    out = _parse_decision('{"done": true, "summary": "all done"}')
+    out = parse_decision('{"done": true, "summary": "all done"}')
     assert out == {"done": True, "summary": "all done"}
 
 
 def test_parse_decision_garbage() -> None:
-    from onshape_mcp.server import _parse_decision
-    out = _parse_decision("not json at all, just rambling")
-    # Falls back to a done-with-error summary so the loop terminates.
+    out = parse_decision("not json at all, just rambling")
     assert out.get("done") is True
     assert "summary" in out
 
 
 def test_shortcuts_high_confidence_subset() -> None:
-    """The tools we just implemented should be marked high confidence OR
-    explicitly flagged medium with a note. Spot-check the core set."""
     high = {"ui.undo", "ui.redo", "view.fit", "sketch.start", "sketch.exit",
             "feature.extrude", "feature.chamfer"}
     for name in high:
@@ -100,14 +95,40 @@ def test_shortcuts_high_confidence_subset() -> None:
 
 
 def test_dispatch_table_complete() -> None:
-    """Every tool the LLM can call must have a dispatch entry."""
-    from onshape_mcp.server import TOOL_DISPATCH
     expected = {
         "view.fit", "view.top",
-        "sketch.start", "sketch.rectangle", "sketch.circle", "sketch.line", "sketch.exit",
+        "sketch.start", "sketch.rectangle", "sketch.circle", "sketch.line",
+        "sketch.dimension", "sketch.equal", "sketch.exit",
         "feature.extrude", "feature.fillet", "feature.chamfer",
         "select.face", "select.edge",
         "ui.undo", "ui.redo",
     }
     assert expected.issubset(set(TOOL_DISPATCH.keys())), \
         f"missing dispatch entries: {expected - set(TOOL_DISPATCH.keys())}"
+
+
+def test_dispatch_sketch_dimension_signature() -> None:
+    """sketch.dimension needs entity_xy + label_xy + value_mm.
+    The dispatch handler should reshape flat LLM args into that."""
+    from onshape_mcp.dispatch import _xy
+    args = {"entity_x": 100, "entity_y": 200, "label_x": 110, "label_y": 210, "value_mm": 5}
+    assert _xy(args, "entity_x", "entity_y") == (100.0, 200.0)
+    assert _xy(args, "label_x", "label_y") == (110.0, 210.0)
+
+
+def test_agent_prompt_teaches_constrained_sketch() -> None:
+    """The system prompt should explicitly teach the constrained-sketch
+    workflow so the LLM doesn't try to pick exact 5mm pixel coords."""
+    p = build_agent_system_prompt()
+    assert "constrained-sketch" in p
+    assert "sketch.dimension" in p
+    assert "5x5" in p
+    assert "cube" in p
+
+
+def test_run_task_importable() -> None:
+    """The CLI runner should be importable without triggering browser/vision
+    side effects."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("run_task", "scripts/run_task.py")
+    assert spec is not None

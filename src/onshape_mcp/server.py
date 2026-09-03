@@ -11,17 +11,19 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import tools as datasheet
 from . import ui_actions
 from .config import settings
+from .dispatch import TOOL_DISPATCH, build_agent_system_prompt
 from .driver import OnshapeDriver
 from .journal import JournalEntry, journal
+from .loop import AgentLoop
 from .vision import GeminiWeb
 
 mcp = FastMCP("onshape-mcp")
 
 _driver: OnshapeDriver | None = None
 _vision: GeminiWeb | None = None
+_loop: AgentLoop | None = None
 
 
 async def _driver_lazy() -> OnshapeDriver:
@@ -38,6 +40,13 @@ async def _vision_lazy() -> GeminiWeb:
     if _vision is None:
         _vision = GeminiWeb()
     return _vision
+
+
+async def _loop_lazy() -> AgentLoop:
+    global _loop
+    if _loop is None:
+        _loop = AgentLoop()
+    return _loop
 
 
 # ─── meta tools ───────────────────────────────────────────────────────────
@@ -145,6 +154,31 @@ async def onshape_sketch_line(p1_x: float, p1_y: float, p2_x: float, p2_y: float
 
 
 @mcp.tool()
+async def onshape_sketch_dimension(
+    entity_x: float, entity_y: float, label_x: float, label_y: float, value_mm: float
+) -> str:
+    """Dimension an entity to an exact mm value. Click the entity, place the
+    label, type the value, Enter. Use this in the constrained-sketch workflow
+    to set exact sizes on a rectangle you drew at any size."""
+    d = await _driver_lazy()
+    return json.dumps(
+        (await ui_actions.sketch_dimension(
+            d, (entity_x, entity_y), (label_x, label_y), value_mm
+        )).to_dict()
+    )
+
+
+@mcp.tool()
+async def onshape_sketch_equal(x0: float, y0: float, x1: float, y1: float) -> str:
+    """Equal constraint between two entities. Click two edges/sides to make
+    them the same size. Useful for 'make this a square'."""
+    d = await _driver_lazy()
+    return json.dumps(
+        (await ui_actions.sketch_equal(d, (x0, y0), (x1, y1))).to_dict()
+    )
+
+
+@mcp.tool()
 async def onshape_sketch_exit() -> str:
     d = await _driver_lazy()
     return json.dumps((await ui_actions.sketch_exit(d)).to_dict())
@@ -202,27 +236,6 @@ async def onshape_ui_redo() -> str:
 
 # Cap the loop so a runaway agent doesn't burn the day.
 MAX_AGENT_STEPS = 25
-STUCK_THRESHOLD = 3  # if 3 actions in a row don't change the screenshot, stop
-
-
-def _build_agent_system_prompt() -> str:
-    return (
-        "You are an agent that drives the Onshape web CAD application visually, "
-        "the way a human would. You see screenshots and call tools.\n\n"
-        "On each turn:\n"
-        "  1. Read the user's goal.\n"
-        "  2. Look at the current screenshot.\n"
-        "  3. Decide the single next tool to call. Pick ONE tool. Provide its "
-        "arguments as a JSON object matching its signature.\n"
-        "  4. If you have completed the goal, return {\"done\": true, \"summary\": \"...\"}.\n\n"
-        "Be conservative. When in doubt, take a screenshot and re-look. The UI "
-        "is fragile: wrong clicks can deselect, dismiss dialogs, or trigger "
-        "unrelated tools.\n\n"
-        "Coordinate space: viewport pixels (0,0 = top-left). Use the "
-        "`viewport_size` tool if you need the bounds.\n\n"
-        "Available tools:\n\n"
-        + datasheet.as_prompt_block()
-    )
 
 
 @mcp.tool()
@@ -231,134 +244,53 @@ async def act(goal: str, max_steps: int = MAX_AGENT_STEPS) -> str:
     UI to achieve it. Uses Gemini web for vision + reasoning. Returns a
     summary of actions taken and the final screenshot.
     """
-    d = await _driver_lazy()
-    v = await _vision_lazy()
-
-    transcript: list[dict[str, Any]] = []
-    last_shot_hash: str | None = None
-    unchanged = 0
-
-    for step in range(max_steps):
-        shot = await d.screenshot(f"act_step_{step:02d}.png")
-        # Cheap stickiness check: file size + first bytes. Not cryptographic.
-        h = shot.read_bytes()[:4096].hex()
-        if h == last_shot_hash:
-            unchanged += 1
-            if unchanged >= STUCK_THRESHOLD:
-                transcript.append({"step": step, "stopped": "stuck", "reason": "no UI change"})
-                break
-        else:
-            unchanged = 0
-        last_shot_hash = h
-
-        prompt = (
-            f"User goal: {goal}\n\n"
-            f"Step {step + 1}/{max_steps}.\n"
-            "Look at the screenshot. Reply with JSON: "
-            '{"tool": "<tool_name>", "args": {...}} OR {"done": true, "summary": "..."}'
-        )
-        try:
-            answer = await v.ask_with_image(prompt, shot)
-        except Exception as e:
-            transcript.append({"step": step, "error": f"vision: {e}"})
-            break
-
-        decision = _parse_decision(answer)
-        transcript.append({"step": step, "decision": decision})
-        if decision.get("done"):
-            break
-
-        tool_name = decision.get("tool")
-        args = decision.get("args", {}) or {}
-        try:
-            await _dispatch(d, tool_name, args)
-        except Exception as e:
-            transcript.append({"step": step, "error": f"dispatch: {e}"})
-
+    loop = await _loop_lazy()
+    result = await loop.run(goal, max_steps=max_steps)
+    tail = [
+        {
+            "step": r.step,
+            "tool": r.decision.get("tool"),
+            "args": r.decision.get("args", {}),
+            "ok": r.ok,
+            "error": r.error,
+        }
+        for r in result.steps[-5:]
+    ]
     return json.dumps(
         {
             "goal": goal,
-            "steps": len(transcript),
-            "transcript_tail": transcript[-5:],
-            "final_screenshot": str(shot),
+            "completed": result.completed,
+            "summary": result.summary(),
+            "stop_reason": result.stop_reason,
+            "steps_total": len(result.steps),
+            "transcript_tail": tail,
+            "final_screenshot": str(result.final_screenshot) if result.final_screenshot else None,
         },
         indent=2,
         ensure_ascii=False,
     )
 
 
-def _parse_decision(text: str) -> dict[str, Any]:
-    """Pull a JSON object out of Gemini's reply. Tolerant of markdown fences."""
-    import re
-    # strip code fences
-    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if fenced:
-        candidate = fenced.group(1)
-    else:
-        brace = re.search(r"\{.*\}", text, re.DOTALL)
-        candidate = brace.group(0) if brace else text
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        return {"done": True, "summary": f"Could not parse decision: {text[:200]}"}
-
-
-async def _dispatch(d: OnshapeDriver, tool: str | None, args: dict[str, Any]) -> None:
-    """Route a tool call from the LLM into the right ui_actions function.
-    Args come in flat from the model and are reshaped to function
-    signatures. Unknown tools raise; the LLM shouldn't call things that
-    aren't in the datasheet.
-    """
-    if not tool:
-        return
-    fn = TOOL_DISPATCH.get(tool)
-    if fn is None:
-        raise KeyError(f"unknown tool: {tool}")
-    # Flatten xy pairs to tuples as required.
-    return await fn(d, args)
-
-
-# tool name -> coroutine(d, args) -> Result
-async def _wrap_xy_pair(d: OnshapeDriver, args: dict[str, Any], x1: str, y1: str, x2: str, y2: str, fn):
-    return await fn(d, (args[x1], args[y1]), (args[x2], args[y2]))
-
-
-TOOL_DISPATCH: dict[str, Any] = {
-    "view.fit": lambda d, a: ui_actions.view_fit(d),
-    "view.top": lambda d, a: ui_actions.view_top(d),
-    "sketch.start": lambda d, a: ui_actions.sketch_start(
-        d, (a["plane_x"], a["plane_y"]) if "plane_x" in a and "plane_y" in a else None
-    ),
-    "sketch.rectangle": lambda d, a: ui_actions.sketch_rectangle(
-        d, (a["corner1_x"], a["corner1_y"]), (a["corner2_x"], a["corner2_y"])
-    ),
-    "sketch.circle": lambda d, a: ui_actions.sketch_circle(
-        d, (a["center_x"], a["center_y"]), a["radius_px"]
-    ),
-    "sketch.line": lambda d, a: ui_actions.sketch_line(
-        d, (a["p1_x"], a["p1_y"]), (a["p2_x"], a["p2_y"])
-    ),
-    "sketch.exit": lambda d, a: ui_actions.sketch_exit(d),
-    "feature.extrude": lambda d, a: ui_actions.feature_extrude(d, a.get("depth_mm")),
-    "feature.fillet": lambda d, a: ui_actions.feature_fillet(d, a.get("radius_mm")),
-    "feature.chamfer": lambda d, a: ui_actions.feature_chamfer(d, a.get("distance_mm")),
-    "select.face": lambda d, a: ui_actions.select_face(d, a["x"], a["y"]),
-    "select.edge": lambda d, a: ui_actions.select_edge(d, a["x"], a["y"]),
-    "ui.undo": lambda d, a: ui_actions.undo(d),
-    "ui.redo": lambda d, a: ui_actions.redo(d),
-}
+@mcp.tool()
+async def agent_system_prompt() -> str:
+    """Return the system prompt used by the act() tool. Useful for debugging
+    what the LLM sees."""
+    return build_agent_system_prompt()
 
 
 # ─── lifecycle ────────────────────────────────────────────────────────────
 
 async def _cleanup() -> None:
-    global _driver, _vision
+    global _driver, _vision, _loop
+    if _loop is not None:
+        await _loop.close()
     if _vision is not None:
         await _vision.close()
     if _driver is not None:
         await _driver.close()
     _driver = None
     _vision = None
+    _loop = None
 
 
 def main() -> None:
