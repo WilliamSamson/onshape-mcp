@@ -1,0 +1,41 @@
+[project]
+name = "onshape-mcp"
+version = "0.0.1"
+description = "Visual agentic MCP server for Onshape, driven by Gemini web vision."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Kayode Williams Olalere" },
+]
+dependencies = [
+    "mcp>=1.2.0",
+    "playwright>=1.48.0",
+    "pydantic>=2.8.0",
+    "python-dotenv>=1.0.1",
+    "Pillow>=10.4.0",
+    "httpx>=0.27.0",
+    "gemini-webapi>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"

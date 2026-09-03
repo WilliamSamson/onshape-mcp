@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────
+# onshape-mcp — DO NOT COMMIT secrets, sessions, logs, or state.
+# Everything in this .gitignore is intentionally local-only.
+# ─────────────────────────────────────────────────────────────
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.env.local
+secrets/
+*.pem
+*.key
+*.token
+
+# Browser session (cookies keep you logged into Onshape / Gemini)
+cookies/
+*.cookies.json
+*.cookies.txt
+sessions/
+*.session.json
+playwright-profile/
+.playwright/
+
+# Logs (may contain URLs with doc IDs, session tokens, etc.)
+logs/
+*.log
+
+# Action journal (records every UI op — includes screenshots of your docs)
+state/
+*.journal.jsonl
+screenshots/
+*.png
+!docs/**/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Misc
+*.bak
+*.tmp
+node_modules/
