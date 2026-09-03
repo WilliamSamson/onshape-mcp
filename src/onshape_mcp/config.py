@@ -7,8 +7,20 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load .env from the repo root, if present.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+def _find_repo_root() -> Path:
+    """Walk up from cwd looking for pyproject.toml. Works whether the
+    package is being run from source or from an installed location inside
+    a venv (the package's __file__ would otherwise point at site-packages).
+    """
+    cwd = Path.cwd()
+    for p in [cwd, *cwd.parents]:
+        if (p / "pyproject.toml").is_file():
+            return p
+    return cwd
+
+
+_REPO_ROOT = _find_repo_root()
 load_dotenv(_REPO_ROOT / ".env")
 
 
@@ -21,6 +33,13 @@ def _path(key: str, default: str) -> Path:
 
 
 class Settings:
+    # Onshape cookies live as plain JSON, not in Chrome's encrypted DB.
+    # Chrome's DB on Linux uses a keyring key that's only available to
+    # graphical sessions; headless Playwright can't decrypt, so cookies
+    # look empty. Storing as JSON dodges the whole keyring mess.
+    onshape_cookie_file: Path = _path(
+        "ONSHAPE_COOKIE_FILE", "./cookies/onshape.cookies.json"
+    )
     onshape_browser_profile: Path = _path(
         "ONSHAPE_BROWSER_PROFILE", "./playwright-profile"
     )
@@ -30,7 +49,7 @@ class Settings:
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
     onshape_default_doc: str = os.getenv("ONSHAPE_DEFAULT_DOC", "")
     # "auto" tries real Chrome first then bundled Chromium,
-    # "chrome" requires real Chrome, "chromium" skips the Chrome attempt.
+    # "chrome" requires real Chrome, "chromium" uses bundled Chromium only.
     browser_channel: str = os.getenv("ONSHAPE_BROWSER_CHANNEL", "auto")
 
     def __repr__(self) -> str:  # never leak cookie/profile paths into logs
@@ -44,5 +63,11 @@ class Settings:
 settings = Settings()
 
 # Make sure local-only directories exist.
-for d in (settings.onshape_browser_profile, settings.journal_dir, settings.log_dir):
+for d in (
+    settings.onshape_cookie_file.parent,
+    settings.onshape_browser_profile,
+    settings.gemini_cookie_file.parent,
+    settings.journal_dir,
+    settings.log_dir,
+):
     d.mkdir(parents=True, exist_ok=True)

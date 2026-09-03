@@ -1,6 +1,14 @@
 """Playwright driver for Onshape. One headless Chromium, persistent
-profile so I stay logged in across runs. Profile dir is gitignored
-(see SECURITY.md).
+profile for cache, plain-JSON cookie file for the session.
+
+Why JSON cookies instead of relying on Chrome's encrypted DB:
+on Linux, Chrome encrypts cookies in its DB with a key from the system
+keyring. The keyring is only available to graphical sessions, so
+headless Playwright can't decrypt them; the cookies are present but
+invisible. Storing them as plain JSON (and re-injecting via
+`context.add_cookies()`) sidesteps the whole keyring issue.
+
+Profile dir is gitignored (see SECURITY.md).
 
 This module holds the lowest-level UI primitives. Higher-level Onshape
 ops (sketch, extrude, fillet) live in ui_actions.py and compose these.
@@ -9,6 +17,7 @@ ops (sketch, extrude, fillet) live in ui_actions.py and compose these.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +29,13 @@ ONSHAPE_URL = "https://cad.onshape.com"
 
 
 class OnshapeDriver:
-    def __init__(self, profile_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        profile_dir: Path | None = None,
+        cookie_file: Path | None = None,
+    ) -> None:
         self.profile_dir = (profile_dir or settings.onshape_browser_profile).resolve()
+        self.cookie_file = (cookie_file or settings.onshape_cookie_file).resolve()
         self.channel = settings.browser_channel
         self._pw: Any = None
         self._ctx: BrowserContext | None = None
@@ -29,18 +43,29 @@ class OnshapeDriver:
 
     async def start(self, headless: bool = True) -> Page:
         self._pw = await async_playwright().start()
-        # Persistent context keeps cookies + local storage on disk so a
-        # single `login` keeps us signed in forever.
+        # Persistent context keeps cache + local storage on disk. Cookies
+        # live in self.cookie_file (plain JSON) because Chrome's encrypted
+        # cookie DB is unusable from headless sessions on Linux.
         #
         # Channel strategy: try real Chrome first (no automation markers,
-        # dodges Google's "this browser may not be secure" block, looks
-        # like a normal human session). Fall back to bundled Chromium if
-        # Chrome isn't installed. Set ONSHAPE_BROWSER_CHANNEL=chromium
+        # dodges Google's "this browser may not be secure" block). Fall
+        # back to bundled Chromium. Set ONSHAPE_BROWSER_CHANNEL=chromium
         # to skip the Chrome attempt (e.g. on a Pi with no Chrome).
+        #
+        # WebGL args: Onshape renders the 3D viewport with WebGL. In
+        # headless mode we need to ask explicitly for software WebGL or
+        # the canvas stays blank. `swiftshader` is Google's software
+        # WebGL implementation and works on any machine.
         common = dict(
             user_data_dir=str(self.profile_dir),
             headless=headless,
             viewport={"width": 1440, "height": 900},
+            args=[
+                "--use-gl=swiftshader",
+                "--enable-webgl",
+                "--ignore-gpu-blocklist",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
         if self.channel in ("auto", "chrome"):
             try:
@@ -48,19 +73,43 @@ class OnshapeDriver:
                     **common, channel="chrome"
                 )
                 self._channel_used = "chrome"
-                self._page = await self._ctx.new_page()
-                return self._page
             except Exception as e:
                 if self.channel == "chrome":
                     raise
                 print(f"[driver] real Chrome unavailable ({e}); using bundled Chromium")
-        self._ctx = await self._pw.chromium.launch_persistent_context(
-            **common,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        self._channel_used = "chromium"
+                self._ctx = await self._pw.chromium.launch_persistent_context(**common)
+                self._channel_used = "chromium"
+        else:
+            self._ctx = await self._pw.chromium.launch_persistent_context(**common)
+            self._channel_used = "chromium"
+        await self._load_cookies()
         self._page = await self._ctx.new_page()
         return self._page
+
+    async def _load_cookies(self) -> None:
+        """Re-inject saved cookies into the context before any navigation.
+        Without this, even a logged-in session looks anonymous because
+        Chrome's encrypted DB can't be read headless.
+        """
+        if not self.cookie_file.exists():
+            return
+        try:
+            raw = json.loads(self.cookie_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[driver] cookie file unreadable ({e}); ignoring")
+            return
+        if not raw:
+            return
+        # Playwright's add_cookies wants the same shape it returns.
+        await self._ctx.add_cookies(raw)
+        print(f"[driver] loaded {len(raw)} cookies from {self.cookie_file.name}")
+
+    async def save_cookies(self) -> int:
+        """Dump current context cookies to self.cookie_file. Returns count."""
+        cookies = await self._ctx.cookies()
+        self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
+        self.cookie_file.write_text(json.dumps(cookies, indent=2), encoding="utf-8")
+        return len(cookies)
 
     @property
     def page(self) -> Page:
@@ -73,9 +122,40 @@ class OnshapeDriver:
         return getattr(self, "_channel_used", "unknown")
 
     async def open(self, url: str = ONSHAPE_URL) -> None:
-        await self.page.goto(url, wait_until="domcontentloaded")
+        # Onshape is a SPA. domcontentloaded fires before the WebGL canvas
+        # has rendered, so wait for the network to go idle (the app's API
+        # calls all settle) and then a beat more.
+        await self.page.goto(url, wait_until="networkidle", timeout=60_000)
+        await self.wait_for_app()
 
     # ─── screenshots ─────────────────────────────────────────────────────
+
+    async def wait_for_app(self, timeout: float = 30.0) -> bool:
+        """Wait until the Onshape app shell is on screen. The toolbar that
+        holds the sketch/extrude buttons is a reliable marker.
+
+        Returns True if the shell appeared, False if it timed out. Either
+        way we give the SPA a couple more seconds to settle.
+        """
+        try:
+            # The Onshape toolbar contains text like "Sketch" / "Extrude".
+            # We don't care which one; we just want any tool-button rendered.
+            await self.page.wait_for_function(
+                """() => {
+                    const btns = document.querySelectorAll('button, [role="button"]');
+                    for (const b of btns) {
+                        const t = (b.textContent || b.getAttribute('aria-label') || '').trim();
+                        if (/^(Sketch|Extrude|Part|Home|Documents?)$/i.test(t)) return true;
+                    }
+                    return false;
+                }""",
+                timeout=timeout * 1000,
+            )
+            # Belt-and-braces: a beat more for the WebGL canvas to paint.
+            await asyncio.sleep(2.0)
+            return True
+        except Exception:
+            return False
 
     async def screenshot(self, name: str = "shot.png") -> Path:
         out = settings.journal_dir / name
@@ -212,16 +292,17 @@ class OnshapeDriver:
 
 
 async def login_interactive() -> None:
-    """Open a headed browser, let the user log in, then close. The persistent
-    profile means subsequent headless runs stay signed in.
+    """Open a headed browser, let the user log in, then dump the session
+    cookies to self.cookie_file. Subsequent headless runs re-inject them.
     """
     d = OnshapeDriver()
-    page = await d.start(headless=False)
+    await d.start(headless=False)
     await d.open(ONSHAPE_URL)
     print("Log into Onshape in the opened browser, then press Enter here.")
     input("> ")
+    n = await d.save_cookies()
+    print(f"Saved {n} cookies to {d.cookie_file}")
     await d.close()
-    print(f"Session saved to {d.profile_dir}")
 
 
 def main() -> None:

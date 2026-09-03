@@ -23,6 +23,12 @@ playwright-profile/
 playwright-profile-gemini/
 .playwright/
 
+# Encrypted cookie DB leftovers from previous runs (the buggy path)
+playwright-profile/Default/Cookies
+playwright-profile/Default/Cookies-journal
+playwright-profile/Default/Login Data
+playwright-profile/Default/Login Data-journal
+
 # Logs (may contain URLs with doc IDs, session tokens, etc.)
 logs/
 *.log

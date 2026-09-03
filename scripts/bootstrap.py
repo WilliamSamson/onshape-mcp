@@ -108,9 +108,9 @@ def _extract_gemini_cookies() -> None:
 
 
 def _onshape_login() -> None:
-    profile = REPO_ROOT / "playwright-profile"
-    if profile.exists() and any(profile.iterdir()):
-        print(f"[bootstrap] Onshape profile already at {profile} (skipping login)")
+    cookie_file = REPO_ROOT / "cookies" / "onshape.cookies.json"
+    if cookie_file.exists() and cookie_file.stat().st_size > 0:
+        print(f"[bootstrap] Onshape cookies already at {cookie_file} (skipping login)")
         return
     print("[bootstrap] need to log into Onshape (one-time, headed)")
     _run("onshape login",
