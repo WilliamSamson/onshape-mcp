@@ -15,7 +15,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "Pillow>=10.4.0",
     "httpx>=0.27.0",
-    "gemini-webapi>=0.4.0",
+    "gemini-webapi>=2.0.0",  # verify GeminiClient API on first install — 0.x→2.x is breaking
 ]
 
 [project.optional-dependencies]
