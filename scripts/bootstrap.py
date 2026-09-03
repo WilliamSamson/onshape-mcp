@@ -88,7 +88,21 @@ def _extract_gemini_cookies() -> None:
     if cookie_file.exists() and cookie_file.stat().st_size > 0:
         print(f"[bootstrap] Gemini cookies already at {cookie_file} (skipping)")
         return
-    print("[bootstrap] need to extract Gemini web cookies (one-time, headed)")
+
+    # Preferred path: read cookies straight from the user's real Chrome
+    # session. No browser launch, so Google's anti-automation block
+    # doesn't fire.
+    print("[bootstrap] trying Chrome-session cookie extraction first")
+    result = subprocess.run(
+        [str(VENV_PY), str(REPO_ROOT / "scripts" / "extract_cookies_from_chrome.py")],
+        cwd=str(REPO_ROOT),
+    )
+    if result.returncode == 0 and cookie_file.exists():
+        return
+
+    # Fallback: headed Playwright (real Chrome if available, bundled
+    # Chromium otherwise). User has to log in manually.
+    print("[bootstrap] Chrome-session extraction failed; falling back to headed Playwright")
     _run("extract_gemini_cookies.py",
          [str(VENV_PY), str(REPO_ROOT / "scripts" / "extract_gemini_cookies.py")])
 

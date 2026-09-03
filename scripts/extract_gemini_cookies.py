@@ -1,15 +1,22 @@
-"""Extract Gemini web cookies via a headed Playwright session.
+"""Extract Gemini cookies via a headed Playwright session.
 
-Usage:
-    python scripts/extract_gemini_cookies.py
+Fallback path. The reliable one is scripts/extract_cookies_from_chrome.py
+which reads your real Chrome session without launching a browser.
+
+This script is here for when you don't have Chrome installed, or when
+browser-cookie3 can't read your profile (e.g. macOS Keychain prompt).
 
 What it does:
-  1. Opens a headed Chromium pointing at gemini.google.com.
+  1. Opens a headed browser pointing at gemini.google.com. Tries your
+     installed real Chrome first (channel="chrome"), falls back to
+     bundled Chromium.
   2. Waits for you to log in.
   3. Grabs __Secure-1PSID and __Secure-1PSIDTS from the context.
-  4. Writes them to cookies/gemini.cookies.json in the format vision.py expects.
+  4. Writes them to cookies/gemini.cookies.json.
 
-This replaces the manual Cookie-Editor extension flow. Much less error-prone.
+Note: Google sometimes blocks automated browser logins with "This browser
+or app may not be secure". If that happens, use the Chrome-session
+extractor instead.
 """
 
 from __future__ import annotations
@@ -34,16 +41,30 @@ async def main() -> int:
     profile_dir = REPO_ROOT / "playwright-profile-gemini"
     profile_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[extract_gemini_cookies] opening headed Chromium, profile={profile_dir}")
+    print(f"[extract_gemini_cookies] opening headed browser, profile={profile_dir}")
     print("[extract_gemini_cookies] log into gemini.google.com in the opened window.")
     print("[extract_gemini_cookies] when you see the Gemini chat UI, come back here and press Enter.")
 
     async with async_playwright() as p:
-        ctx = await p.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            headless=False,
-            viewport={"width": 1200, "height": 800},
-        )
+        # Try your real Chrome first. Google blocks automated Chromium
+        # but tends to allow real Chrome. Fall back to bundled Chromium
+        # if Chrome isn't installed.
+        ctx = None
+        try:
+            ctx = await p.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+                channel="chrome",
+                viewport={"width": 1200, "height": 800},
+            )
+            print("[extract_gemini_cookies] using installed Chrome (channel=chrome)")
+        except Exception as e:
+            print(f"[extract_gemini_cookies] real Chrome unavailable ({e}); using bundled Chromium")
+            ctx = await p.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,
+                viewport={"width": 1200, "height": 800},
+            )
         page = await ctx.new_page()
         await page.goto(GEMINI_HOME, wait_until="domcontentloaded")
         input("\n[extract_gemini_cookies] press Enter after you've logged in...\n")

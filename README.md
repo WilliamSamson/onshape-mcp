@@ -49,6 +49,20 @@ python -m onshape_mcp.server
 cookie extraction, the Onshape login, and the M0 sanity checks. Re-run it
 any time; it's idempotent.
 
+## A note on Google + automated browsers
+
+Google blocks automated browser logins ("This browser or app may not be
+secure") when you launch Playwright's bundled Chromium against a Google
+login page. I hit this. The fix in `bootstrap.py` is to try reading the
+Gemini cookies straight out of my real Chrome session first, via
+`browser-cookie3`. No browser launch, no automation block. If that
+somehow fails (Chrome locked, no Chrome installed), it falls back to
+launching real Chrome via Playwright (`channel="chrome"`), and only as
+a last resort launches bundled Chromium.
+
+If you only use Firefox or another browser, install Chrome once and log
+into Gemini in it. The script reads the cookies from there.
+
 ## Architecture in one screen
 
 ```

@@ -4,4 +4,5 @@ pydantic>=2.8.0
 python-dotenv>=1.0.1
 Pillow>=10.4.0
 httpx>=0.27.0
+browser-cookie3>=0.20.1  # read Gemini cookies from real Chrome to dodge Google's automation block
 gemini-webapi>=2.0.0  # NOTE: 0.x→2.x is a breaking jump — verify the GeminiClient API matches vision.py on first install
