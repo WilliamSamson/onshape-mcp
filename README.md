@@ -42,9 +42,10 @@ feature, mate this to that.
 
 ## Status
 
-🚧 **Milestone 0** — scaffolding, login test, Gemini web test.
-Targets for the first working prototype: draw a sketch, extrude it, add a
-chamfer, save the doc.
+✅ **M0** — scaffolding, smoke tests, public repo.
+🚧 **M1** — first 10 datasheet tools wired against Playwright + Gemini web
+closed-loop `act(goal)`. Targets: draw a rectangle, extrude it, add a chamfer.
+Targets for **M2**: pattern, mirror_body, assembly.mate, journal-replay undo.
 
 ## Quick start
 
@@ -53,6 +54,7 @@ git clone https://github.com/WilliamSamson/onshape-mcp
 cd onshape-mcp
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+playwright install chromium
 cp .env.example .env
 # Edit .env with your Gemini cookie path, etc.
 
@@ -60,13 +62,20 @@ cp .env.example .env
 python -m onshape_mcp.driver login
 
 # 2. Verify Gemini web works with your cookies
-python scripts/m0_gemini.py
+python scripts/m0_gemini.py some-image.png
 
 # 3. Run the MCP server
 python -m onshape_mcp.server
 ```
 
-Then point your MCP client at it.
+Then point your MCP client at it. The two tool surfaces:
+
+- **Direct** — `screenshot`, `describe_view`, `viewport_size`, `journal_tail`,
+  `tool_datasheet`, `open_doc`, and the per-tool `onshape_*` tools. Use these
+  when you want to drive the loop yourself.
+- **Agentic** — `act(goal="draw a 50x30mm rectangle and extrude it 10mm")`
+  lets Gemini web run the closed loop for you, bounded by `max_steps` and
+  a stuck detector.
 
 ## Safety
 

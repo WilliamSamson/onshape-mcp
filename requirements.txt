@@ -1,4 +1,4 @@
-mcp>=1.2.0
+mcp>=1.2.0,<2.0.0  # TODO: migrate to FastMCP→MCPServer (mcp 2.x) in M2
 playwright>=1.48.0
 pydantic>=2.8.0
 python-dotenv>=1.0.1
