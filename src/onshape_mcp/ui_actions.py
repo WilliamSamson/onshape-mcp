@@ -185,6 +185,9 @@ async def _activate_sketch_tool(d: OnshapeDriver, name: str) -> Result:
     if cmd_id:
         loc = d.page.locator(f"[command-id='{cmd_id}']")
         if await loc.count() > 0:
+            classes = await loc.first.get_attribute("class") or ""
+            if "is-active" in classes:
+                return Result(True, f"{name} already active")
             await loc.first.click()
             await asyncio.sleep(0.3)
             return Result(True, f"{name} tool active (command-id: {cmd_id})")
@@ -200,6 +203,27 @@ async def _activate_sketch_tool(d: OnshapeDriver, name: str) -> Result:
             await asyncio.sleep(0.15)
             return Result(True, f"{name} tool active")
     return Result(False, f"{name}: no binding available")
+
+
+def _parse_dim_px(val: float | str | None, default_px: float = 120.0) -> float:
+    if val is None:
+        return default_px
+    try:
+        s = str(val).strip().lower()
+        num = float("".join(c for c in s if c.isdigit() or c == "."))
+        if "cm" in s:
+            px = num * 32.583
+        elif "mm" in s:
+            px = num * 3.2583
+        elif "in" in s or "inch" in s:
+            px = num * 82.75
+        elif num <= 25:
+            px = num * 32.583
+        else:
+            px = num * 3.2583
+        return max(40.0, min(550.0, px))
+    except Exception:
+        return default_px
 
 
 async def get_canvas_origin(d: OnshapeDriver) -> tuple[float, float]:
@@ -242,13 +266,14 @@ async def sketch_rectangle(
     centered: bool | None = None,
 ) -> Result:
     cx, cy = await get_canvas_origin(d)
+    span_x = _parse_dim_px(width, default_px=120.0)
+    span_y = _parse_dim_px(height, default_px=120.0)
+
     if centered:
-        span = 70.0
-        corner1 = (cx - span, cy - span)
-        corner2 = (cx + span, cy + span)
+        corner1 = (cx - span_x / 2.0, cy - span_y / 2.0)
+        corner2 = (cx + span_x / 2.0, cy + span_y / 2.0)
     elif quadrant is not None:
         q = str(quadrant).upper().strip()
-        span_x, span_y = 120.0, 120.0
         if q in ("1", "I", "TOP-RIGHT", "NE"):
             corner1 = (cx, cy)
             corner2 = (cx + span_x, cy - span_y)
@@ -261,6 +286,9 @@ async def sketch_rectangle(
         elif q in ("4", "IV", "BOTTOM-RIGHT", "SE"):
             corner1 = (cx, cy)
             corner2 = (cx + span_x, cy + span_y)
+    elif corner1 is None and corner2 is None:
+        corner1 = (cx - span_x / 2.0, cy - span_y / 2.0)
+        corner2 = (cx + span_x / 2.0, cy + span_y / 2.0)
 
     c1 = await _ensure_viewport_coords(
         d, corner1 if corner1 is not None else (cx - 70.0, cy - 70.0)
@@ -282,22 +310,28 @@ async def sketch_rectangle(
 
     min_x, max_x = min(c1[0], c2[0]), max(c1[0], c2[0])
     min_y, max_y = min(c1[1], c2[1]), max(c1[1], c2[1])
-    top_mid = ((min_x + max_x) / 2.0, min_y)
-    left_mid = (min_x, (min_y + max_y) / 2.0)
+    # Pick points at 30% along edges to safely avoid datum axis lines and origin glyphs
+    dx = max_x - min_x
+    dy = max_y - min_y
+    top_pick = (min_x + dx * 0.3, min_y)
+    left_pick = (min_x, min_y + dy * 0.3)
+    top_label = (top_pick[0], top_pick[1] - 45.0)
+    left_label = (left_pick[0] - 55.0, left_pick[1])
 
     # If width or height are specified, apply constraints and dimensions
     if width is not None and height is not None and str(width).strip() == str(height).strip():
         # Square: apply Equal constraint first so geometry is strictly equilateral
-        await sketch_equal(d, top_mid, left_mid)
+        await sketch_equal(d, top_pick, left_pick)
         await asyncio.sleep(0.5)
         # Dimension top edge
-        await sketch_dimension(d, top_mid, (top_mid[0], top_mid[1] - 40.0), width)
+        await sketch_dimension(d, top_pick, top_label, width)
     elif width is not None:
-        await sketch_dimension(d, top_mid, (top_mid[0], top_mid[1] - 40.0), width)
+        await sketch_dimension(d, top_pick, top_label, width)
         if height is not None:
-            await sketch_dimension(d, left_mid, (left_mid[0] - 40.0, left_mid[1]), height)
+            await asyncio.sleep(0.6)
+            await sketch_dimension(d, left_pick, left_label, height)
     elif height is not None:
-        await sketch_dimension(d, left_mid, (left_mid[0] - 40.0, left_mid[1]), height)
+        await sketch_dimension(d, left_pick, left_label, height)
 
     shot = await d.screenshot("sketch_rectangle.png")
     meta = {

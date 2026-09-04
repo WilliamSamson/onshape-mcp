@@ -196,15 +196,17 @@ def build_agent_system_prompt() -> str:
         '`quadrant="III"` (bottom-left), or `quadrant="IV"` (bottom-right).\n'
         "     - Arbitrary corners: pass `corner1=[x1, y1]`, `corner2=[x2, y2]` in pixels or relative CAD units.\n"
         "  3. Sizing:\n"
-        '     - `sketch.rectangle` accepts `width` and `height` (e.g. width="5 cm", height="5 cm" or width_mm=50).\n'
-        "     - It automatically applies Equal constraints and drives the Onshape dimension solver directly!\n"
+        '     - `sketch.rectangle` accepts `width` and `height` (e.g. width="12 cm", height="8 cm" or width_mm=50).\n'
+        "     - It automatically applies constraints and drives the Onshape dimension solver for both width and height!\n"
+        "     - After calling `sketch.rectangle` with width and height, both dimensions are ALREADY applied, so call `sketch.exit` next!\n"
         '     - Alternatively, call `sketch.dimension` with the entity coordinate and `value` (e.g. "5 cm").\n'
         "  4. `sketch.exit`: Commits and closes the sketch dialog.\n"
         "  5. `feature.extrude`: Extrudes the sketch with `depth` in mm or cm.\n\n"
-        "For example: to draw a 4cm x 4cm square on the Front plane in Quadrant 1, call:\n"
-        '  sketch.start({"plane": "Front"})\n'
-        '  sketch.rectangle({"quadrant": "I", "width": "4 cm", "height": "4 cm"})\n'
-        "  sketch.exit({})\n\n"
+        "For example: to draw a 12cm by 8cm box on the Front plane, call:\n"
+        '  step 0: sketch.start({"plane": "Front"})\n'
+        '  step 1: sketch.rectangle({"centered": true, "width": "12 cm", "height": "8 cm"})\n'
+        '  step 2: sketch.exit({})\n'
+        '  step 3: {"done": true, "summary": "12cm by 8cm box drawn and dimensioned on Front plane"}\n\n'
         "For a '5x5 square extruded 5mm into a cube' that's just sketch.start, sketch.rectangle with width='5 mm', "
         "sketch.exit, and feature.extrude with depth='5 mm'!\n\n"
         "## Be conservative\n\n"
