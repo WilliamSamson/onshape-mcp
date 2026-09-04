@@ -26,7 +26,7 @@ class JournalEntry:
     screenshot: str | None = None  # relative path under state/ if captured
 
     @classmethod
-    def new(cls, tool: str, args: dict[str, Any]) -> "JournalEntry":
+    def new(cls, tool: str, args: dict[str, Any]) -> JournalEntry:
         return cls(
             ts=time.time(),
             action_id=uuid.uuid4().hex[:12],

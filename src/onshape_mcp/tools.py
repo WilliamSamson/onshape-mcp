@@ -8,7 +8,6 @@ Status flags: planned, stub, working.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass
@@ -21,7 +20,7 @@ class ToolSpec:
     status: str = "planned"
 
 
-# ─── sketch ────────────────────────────────────────────────────────────────
+# Sketch tools
 SKETCH_START = ToolSpec(
     name="sketch.start",
     purpose="Open a new sketch on a chosen plane (Top/Front/Right or a face).",
@@ -31,14 +30,14 @@ SKETCH_START = ToolSpec(
 )
 SKETCH_RECTANGLE = ToolSpec(
     name="sketch.rectangle",
-    purpose="Two-corner rectangle. Pass corner1=(x,y), corner2=(x,y) in sketch units.",
+    purpose="Two-corner rectangle. Pass quadrant='I'|'II'|'III'|'IV', centered=true, or corner1=(x,y), corner2=(x,y), with optional width, height (e.g. '5 cm' or 50).",
     requires=["sketch.active=true"],
     next_steps=["sketch.dimension", "feature.extrude", "sketch.mirror"],
     status="planned",
 )
 SKETCH_CIRCLE = ToolSpec(
     name="sketch.circle",
-    purpose="Center + radius. center=(x,y), radius=mm.",
+    purpose="Center + radius. Pass centered=true (for origin) or center=(x,y), radius=mm or radius_px.",
     requires=["sketch.active=true"],
     next_steps=["sketch.dimension", "feature.extrude"],
     status="planned",
@@ -87,7 +86,7 @@ SKETCH_EXIT = ToolSpec(
     status="planned",
 )
 
-# ─── features ───────────────────────────────────────────────────────────────
+# Feature tools
 FEATURE_EXTRUDE = ToolSpec(
     name="feature.extrude",
     purpose="Extrude the active sketch region by depth, optionally with draft/taper.",
@@ -133,7 +132,7 @@ FEATURE_MIRROR_BODY = ToolSpec(
     status="planned",
 )
 
-# ─── selection / view ──────────────────────────────────────────────────────
+# Selection and view
 SELECT_FACE = ToolSpec(
     name="select.face",
     purpose="Click a face in the viewport. Pass face_id (or rely on vision pick).",
@@ -165,7 +164,7 @@ VIEW_ROTATE = ToolSpec(
     status="planned",
 )
 
-# ─── assembly ──────────────────────────────────────────────────────────────
+# Assembly
 ASSEMBLY_MATE = ToolSpec(
     name="assembly.mate",
     purpose="Create a mate between two faces / edges / vertices.",
@@ -178,7 +177,7 @@ ASSEMBLY_PATTERN = ToolSpec(
     status="planned",
 )
 
-# ─── document / meta ───────────────────────────────────────────────────────
+# Document and meta
 DOC_OPEN = ToolSpec(
     name="doc.open",
     purpose="Navigate to a document by URL or docId/elementId.",
@@ -203,15 +202,34 @@ REDO = ToolSpec(
     status="planned",
 )
 
-
 ALL_TOOLS: list[ToolSpec] = [
-    SKETCH_START, SKETCH_RECTANGLE, SKETCH_CIRCLE, SKETCH_LINE, SKETCH_SPLINE,
-    SKETCH_DIMENSION, SKETCH_CONSTRAIN, SKETCH_MIRROR, SKETCH_EXIT,
-    FEATURE_EXTRUDE, FEATURE_REVOLVE, FEATURE_FILLET, FEATURE_CHAMFER,
-    FEATURE_SHELL, FEATURE_PATTERN, FEATURE_MIRROR_BODY,
-    SELECT_FACE, SELECT_EDGE, SELECT_BODY, VIEW_FIT, VIEW_ROTATE,
-    ASSEMBLY_MATE, ASSEMBLY_PATTERN,
-    DOC_OPEN, DOC_SAVE, UNDO, REDO,
+    SKETCH_START,
+    SKETCH_RECTANGLE,
+    SKETCH_CIRCLE,
+    SKETCH_LINE,
+    SKETCH_SPLINE,
+    SKETCH_DIMENSION,
+    SKETCH_CONSTRAIN,
+    SKETCH_MIRROR,
+    SKETCH_EXIT,
+    FEATURE_EXTRUDE,
+    FEATURE_REVOLVE,
+    FEATURE_FILLET,
+    FEATURE_CHAMFER,
+    FEATURE_SHELL,
+    FEATURE_PATTERN,
+    FEATURE_MIRROR_BODY,
+    SELECT_FACE,
+    SELECT_EDGE,
+    SELECT_BODY,
+    VIEW_FIT,
+    VIEW_ROTATE,
+    ASSEMBLY_MATE,
+    ASSEMBLY_PATTERN,
+    DOC_OPEN,
+    DOC_SAVE,
+    UNDO,
+    REDO,
 ]
 
 

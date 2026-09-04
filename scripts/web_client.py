@@ -16,19 +16,19 @@ Same AgentLoop, same dispatch, same prompt.
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 import threading
 from pathlib import Path
 from queue import Queue
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from flask import Flask, Response, jsonify, request, send_from_directory  # noqa: E402
+from flask import Flask, jsonify, request, send_from_directory  # noqa: E402
 
 from onshape_mcp.config import settings  # noqa: E402
-from onshape_mcp.loop import AgentLoop, StepRecord  # noqa: E402
+from onshape_mcp.loop import AgentLoop  # noqa: E402
 
 app = Flask(
     __name__,
@@ -36,16 +36,19 @@ app = Flask(
     template_folder=str(REPO_ROOT / "scripts" / "templates"),
 )
 
-# Single shared loop. /act submits goals; the loop runs them serially.
-_loop = AgentLoop()
 _loop_lock = threading.Lock()
 _event_queue: Queue = Queue()
 
 
-def _run_goal_sync(goal: str, max_steps: int) -> dict:
+def _run_goal_sync(goal: str, max_steps: int) -> Any:
     """Run the async loop from a Flask thread."""
+
     async def go():
-        return await _loop.run(goal, max_steps=max_steps)
+        loop = AgentLoop()
+        try:
+            return await loop.run(goal, max_steps=max_steps)
+        finally:
+            await loop.close()
 
     return asyncio.run(go())
 

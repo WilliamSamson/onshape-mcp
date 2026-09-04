@@ -60,16 +60,19 @@ def _run(label: str, cmd: list[str], check: bool = True) -> None:
 
 
 def _pip_install() -> None:
-    _run("pip install -r requirements.txt",
-         [str(VENV_PY), "-m", "pip", "install", "--upgrade", "pip", "wheel"],
-         check=False)
-    _run("pip install -r requirements.txt",
-         [str(VENV_PY), "-m", "pip", "install", "-r", "requirements.txt"])
+    _run(
+        "pip install -r requirements.txt",
+        [str(VENV_PY), "-m", "pip", "install", "--upgrade", "pip", "wheel"],
+        check=False,
+    )
+    _run(
+        "pip install -r requirements.txt",
+        [str(VENV_PY), "-m", "pip", "install", "-r", "requirements.txt"],
+    )
 
 
 def _playwright_install() -> None:
-    _run("playwright install chromium",
-         [str(VENV_PY), "-m", "playwright", "install", "chromium"])
+    _run("playwright install chromium", [str(VENV_PY), "-m", "playwright", "install", "chromium"])
 
 
 def _ensure_env_file() -> None:
@@ -103,8 +106,10 @@ def _extract_gemini_cookies() -> None:
     # Fallback: headed Playwright (real Chrome if available, bundled
     # Chromium otherwise). User has to log in manually.
     print("[bootstrap] Chrome-session extraction failed; falling back to headed Playwright")
-    _run("extract_gemini_cookies.py",
-         [str(VENV_PY), str(REPO_ROOT / "scripts" / "extract_gemini_cookies.py")])
+    _run(
+        "extract_gemini_cookies.py",
+        [str(VENV_PY), str(REPO_ROOT / "scripts" / "extract_gemini_cookies.py")],
+    )
 
 
 def _onshape_login() -> None:
@@ -113,8 +118,7 @@ def _onshape_login() -> None:
         print(f"[bootstrap] Onshape cookies already at {cookie_file} (skipping login)")
         return
     print("[bootstrap] need to log into Onshape (one-time, headed)")
-    _run("onshape login",
-         [str(VENV_PY), "-m", "onshape_mcp.driver", "login"])
+    _run("onshape login", [str(VENV_PY), "-m", "onshape_mcp.driver", "login"])
 
 
 def _m0_sanity() -> None:
@@ -139,11 +143,7 @@ def main() -> None:
     _onshape_login()
     _m0_sanity()
 
-    print(
-        "\n[bootstrap] done. next:\n"
-        "  source .venv/bin/activate\n"
-        "  python3 -m onshape_mcp.server"
-    )
+    print("\n[bootstrap] done. next:\n  source .venv/bin/activate\n  python3 -m onshape_mcp.server")
 
 
 if __name__ == "__main__":

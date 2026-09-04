@@ -7,13 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from . import tools as datasheet
 from . import ui_actions
-from .config import settings
-from .dispatch import TOOL_DISPATCH, build_agent_system_prompt
+from .dispatch import build_agent_system_prompt
 from .driver import OnshapeDriver
 from .journal import JournalEntry, journal
 from .loop import AgentLoop
@@ -49,7 +48,8 @@ async def _loop_lazy() -> AgentLoop:
     return _loop
 
 
-# ─── meta tools ───────────────────────────────────────────────────────────
+# Meta tools
+
 
 @mcp.tool()
 async def screenshot(name: str = "shot.png") -> str:
@@ -100,7 +100,8 @@ async def viewport_size() -> str:
     return json.dumps(await d.viewport_box())
 
 
-# ─── view / camera ────────────────────────────────────────────────────────
+# View and camera
+
 
 @mcp.tool()
 async def onshape_view_fit() -> str:
@@ -114,77 +115,107 @@ async def onshape_view_top() -> str:
     return json.dumps((await ui_actions.view_top(d)).to_dict())
 
 
-# ─── sketch ───────────────────────────────────────────────────────────────
+@mcp.tool()
+async def onshape_view_front() -> str:
+    d = await _driver_lazy()
+    return json.dumps((await ui_actions.view_front(d)).to_dict())
+
 
 @mcp.tool()
-async def onshape_sketch_start(plane_x: float | None = None, plane_y: float | None = None) -> str:
-    """Click the Sketch button, then click a plane. If no coords given, picks
-    the center of the viewport (the default top plane)."""
+async def onshape_view_iso() -> str:
     d = await _driver_lazy()
-    plane = (plane_x, plane_y) if plane_x is not None and plane_y is not None else None
-    return json.dumps((await ui_actions.sketch_start(d, plane)).to_dict())
+    return json.dumps((await ui_actions.view_iso(d)).to_dict())
+
+
+# Sketch tools
+
+
+@mcp.tool()
+async def onshape_sketch_start(
+    plane_x: float | None = None,
+    plane_y: float | None = None,
+    plane: str | None = None,
+) -> str:
+    """Click the Sketch button, then click a plane. Pass plane name ('Top', 'Front', 'Right')
+    or coordinates. Default is 'Top'."""
+    d = await _driver_lazy()
+    pt = (plane_x, plane_y) if plane_x is not None and plane_y is not None else None
+    return json.dumps((await ui_actions.sketch_start(d, pt, plane_name=plane)).to_dict())
 
 
 @mcp.tool()
 async def onshape_sketch_rectangle(
-    corner1_x: float, corner1_y: float, corner2_x: float, corner2_y: float
+    corner1_x: float | None = None,
+    corner1_y: float | None = None,
+    corner2_x: float | None = None,
+    corner2_y: float | None = None,
+    width: float | str | None = None,
+    height: float | str | None = None,
+    quadrant: str | int | None = None,
+    centered: bool | None = None,
 ) -> str:
     d = await _driver_lazy()
+    c1 = (corner1_x, corner1_y) if corner1_x is not None and corner1_y is not None else None
+    c2 = (corner2_x, corner2_y) if corner2_x is not None and corner2_y is not None else None
     return json.dumps(
-        (await ui_actions.sketch_rectangle(
-            d, (corner1_x, corner1_y), (corner2_x, corner2_y)
-        )).to_dict()
+        (
+            await ui_actions.sketch_rectangle(
+                d, c1, c2, width=width, height=height, quadrant=quadrant, centered=centered
+            )
+        ).to_dict()
     )
 
 
 @mcp.tool()
-async def onshape_sketch_circle(center_x: float, center_y: float, radius_px: float) -> str:
+async def onshape_sketch_circle(
+    center_x: float | None = None,
+    center_y: float | None = None,
+    radius_px: float = 50.0,
+    centered: bool | None = None,
+) -> str:
     d = await _driver_lazy()
+    center = (center_x, center_y) if center_x is not None and center_y is not None else None
     return json.dumps(
-        (await ui_actions.sketch_circle(d, (center_x, center_y), radius_px)).to_dict()
+        (await ui_actions.sketch_circle(d, center, radius_px, centered=centered)).to_dict()
     )
 
 
 @mcp.tool()
 async def onshape_sketch_line(p1_x: float, p1_y: float, p2_x: float, p2_y: float) -> str:
     d = await _driver_lazy()
-    return json.dumps(
-        (await ui_actions.sketch_line(d, (p1_x, p1_y), (p2_x, p2_y))).to_dict()
-    )
+    return json.dumps((await ui_actions.sketch_line(d, (p1_x, p1_y), (p2_x, p2_y))).to_dict())
 
 
 @mcp.tool()
 async def onshape_sketch_dimension(
     entity_x: float, entity_y: float, label_x: float, label_y: float, value_mm: float
 ) -> str:
-    """Dimension an entity to an exact mm value. Click the entity, place the
-    label, type the value, Enter. Use this in the constrained-sketch workflow
-    to set exact sizes on a rectangle you drew at any size."""
     d = await _driver_lazy()
     return json.dumps(
-        (await ui_actions.sketch_dimension(
-            d, (entity_x, entity_y), (label_x, label_y), value_mm
-        )).to_dict()
+        (
+            await ui_actions.sketch_dimension(d, (entity_x, entity_y), (label_x, label_y), value_mm)
+        ).to_dict()
     )
 
 
 @mcp.tool()
-async def onshape_sketch_equal(x0: float, y0: float, x1: float, y1: float) -> str:
-    """Equal constraint between two entities. Click two edges/sides to make
-    them the same size. Useful for 'make this a square'."""
+async def onshape_sketch_equal(
+    entity1_x: float, entity1_y: float, entity2_x: float, entity2_y: float
+) -> str:
     d = await _driver_lazy()
     return json.dumps(
-        (await ui_actions.sketch_equal(d, (x0, y0), (x1, y1))).to_dict()
+        (await ui_actions.sketch_equal(d, (entity1_x, entity1_y), (entity2_x, entity2_y))).to_dict()
     )
 
 
 @mcp.tool()
-async def onshape_sketch_exit() -> str:
+async def onshape_sketch_exit(commit: bool = True) -> str:
     d = await _driver_lazy()
-    return json.dumps((await ui_actions.sketch_exit(d)).to_dict())
+    return json.dumps((await ui_actions.sketch_exit(d, commit=commit)).to_dict())
 
 
-# ─── features ─────────────────────────────────────────────────────────────
+# Feature tools
+
 
 @mcp.tool()
 async def onshape_feature_extrude(depth_mm: float | None = None) -> str:
@@ -204,7 +235,8 @@ async def onshape_feature_chamfer(distance_mm: float | None = None) -> str:
     return json.dumps((await ui_actions.feature_chamfer(d, distance_mm)).to_dict())
 
 
-# ─── selection ────────────────────────────────────────────────────────────
+# Selection
+
 
 @mcp.tool()
 async def onshape_select_face(x: float, y: float) -> str:
@@ -218,7 +250,8 @@ async def onshape_select_edge(x: float, y: float) -> str:
     return json.dumps((await ui_actions.select_edge(d, x, y)).to_dict())
 
 
-# ─── undo/redo ────────────────────────────────────────────────────────────
+# Undo and redo
+
 
 @mcp.tool()
 async def onshape_ui_undo() -> str:
@@ -232,7 +265,7 @@ async def onshape_ui_redo() -> str:
     return json.dumps((await ui_actions.redo(d)).to_dict())
 
 
-# ─── closed-loop agent ────────────────────────────────────────────────────
+# Closed-loop agent
 
 # Cap the loop so a runaway agent doesn't burn the day.
 MAX_AGENT_STEPS = 25
@@ -278,7 +311,8 @@ async def agent_system_prompt() -> str:
     return build_agent_system_prompt()
 
 
-# ─── lifecycle ────────────────────────────────────────────────────────────
+# Lifecycle
+
 
 async def _cleanup() -> None:
     global _driver, _vision, _loop

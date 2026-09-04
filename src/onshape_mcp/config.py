@@ -32,21 +32,26 @@ def _path(key: str, default: str) -> Path:
     return p
 
 
+def _bool(key: str, default: bool) -> bool:
+    val = os.getenv(key)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
 class Settings:
     # Onshape cookies live as plain JSON, not in Chrome's encrypted DB.
     # Chrome's DB on Linux uses a keyring key that's only available to
     # graphical sessions; headless Playwright can't decrypt, so cookies
     # look empty. Storing as JSON dodges the whole keyring mess.
-    onshape_cookie_file: Path = _path(
-        "ONSHAPE_COOKIE_FILE", "./cookies/onshape.cookies.json"
-    )
-    onshape_browser_profile: Path = _path(
-        "ONSHAPE_BROWSER_PROFILE", "./playwright-profile"
-    )
+    onshape_cookie_file: Path = _path("ONSHAPE_COOKIE_FILE", "./cookies/onshape.cookies.json")
+    onshape_browser_profile: Path = _path("ONSHAPE_BROWSER_PROFILE", "./playwright-profile")
     gemini_cookie_file: Path = _path("GEMINI_COOKIE_FILE", "./cookies/gemini.cookies.json")
     journal_dir: Path = _path("JOURNAL_DIR", "./state")
     log_dir: Path = _path("LOG_DIR", "./logs")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+    gemini_temporary_chat: bool = _bool("GEMINI_TEMPORARY_CHAT", True)
+    gemini_auto_cleanup: bool = _bool("GEMINI_AUTO_CLEANUP", True)
     onshape_default_doc: str = os.getenv("ONSHAPE_DEFAULT_DOC", "")
     # "auto" tries real Chrome first then bundled Chromium,
     # "chrome" requires real Chrome, "chromium" uses bundled Chromium only.
@@ -55,6 +60,8 @@ class Settings:
     def __repr__(self) -> str:  # never leak cookie/profile paths into logs
         return (
             f"Settings(gemini_model={self.gemini_model!r}, "
+            f"gemini_temporary_chat={self.gemini_temporary_chat}, "
+            f"gemini_auto_cleanup={self.gemini_auto_cleanup}, "
             f"browser_channel={self.browser_channel!r}, "
             f"onshape_default_doc={self.onshape_default_doc!r})"
         )

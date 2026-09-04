@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
-import pytest
-
 from onshape_mcp import tools as datasheet
 from onshape_mcp.config import Settings
 from onshape_mcp.dispatch import (
@@ -14,7 +10,8 @@ from onshape_mcp.dispatch import (
     parse_decision,
 )
 from onshape_mcp.journal import Journal, JournalEntry
-from onshape_mcp.shortcuts import BINDINGS, get as binding_for
+from onshape_mcp.shortcuts import BINDINGS
+from onshape_mcp.shortcuts import get as binding_for
 
 
 def test_datasheet_has_tools() -> None:
@@ -87,8 +84,15 @@ def test_parse_decision_garbage() -> None:
 
 
 def test_shortcuts_high_confidence_subset() -> None:
-    high = {"ui.undo", "ui.redo", "view.fit", "sketch.start", "sketch.exit",
-            "feature.extrude", "feature.chamfer"}
+    high = {
+        "ui.undo",
+        "ui.redo",
+        "view.fit",
+        "sketch.start",
+        "sketch.exit",
+        "feature.extrude",
+        "feature.chamfer",
+    }
     for name in high:
         b = binding_for(name)
         assert b.confidence == "high", f"{name} should be high confidence, got {b.confidence}"
@@ -96,21 +100,33 @@ def test_shortcuts_high_confidence_subset() -> None:
 
 def test_dispatch_table_complete() -> None:
     expected = {
-        "view.fit", "view.top",
-        "sketch.start", "sketch.rectangle", "sketch.circle", "sketch.line",
-        "sketch.dimension", "sketch.equal", "sketch.exit",
-        "feature.extrude", "feature.fillet", "feature.chamfer",
-        "select.face", "select.edge",
-        "ui.undo", "ui.redo",
+        "view.fit",
+        "view.top",
+        "sketch.start",
+        "sketch.rectangle",
+        "sketch.circle",
+        "sketch.line",
+        "sketch.dimension",
+        "sketch.equal",
+        "sketch.exit",
+        "feature.extrude",
+        "feature.fillet",
+        "feature.chamfer",
+        "select.face",
+        "select.edge",
+        "ui.undo",
+        "ui.redo",
     }
-    assert expected.issubset(set(TOOL_DISPATCH.keys())), \
+    assert expected.issubset(set(TOOL_DISPATCH.keys())), (
         f"missing dispatch entries: {expected - set(TOOL_DISPATCH.keys())}"
+    )
 
 
 def test_dispatch_sketch_dimension_signature() -> None:
     """sketch.dimension needs entity_xy + label_xy + value_mm.
     The dispatch handler should reshape flat LLM args into that."""
     from onshape_mcp.dispatch import _xy
+
     args = {"entity_x": 100, "entity_y": 200, "label_x": 110, "label_y": 210, "value_mm": 5}
     assert _xy(args, "entity_x", "entity_y") == (100.0, 200.0)
     assert _xy(args, "label_x", "label_y") == (110.0, 210.0)
@@ -130,5 +146,54 @@ def test_run_task_importable() -> None:
     """The CLI runner should be importable without triggering browser/vision
     side effects."""
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("run_task", "scripts/run_task.py")
+    assert spec is not None
+
+
+def test_server_tool_datasheet() -> None:
+    import asyncio
+
+    from onshape_mcp.server import tool_datasheet
+
+    sheet = asyncio.run(tool_datasheet())
+    assert "# Onshape tool vocabulary" in sheet
+    assert "sketch.start" in sheet
+
+
+def test_settings_chat_management() -> None:
+    s = Settings()
+    assert isinstance(s.gemini_temporary_chat, bool)
+    assert isinstance(s.gemini_auto_cleanup, bool)
+    assert s.gemini_temporary_chat is True
+    assert s.gemini_auto_cleanup is True
+
+
+def test_gemini_web_session_management() -> None:
+    from onshape_mcp.vision import GeminiWeb
+
+    gw = GeminiWeb()
+    assert gw.temporary is True
+    assert gw.auto_cleanup is True
+    assert isinstance(gw.created_chat_ids, set)
+    assert len(gw.created_chat_ids) == 0
+    assert gw.get_session() is None
+    gw.reset_session()
+    assert gw.get_session() is None
+
+
+def test_gemini_web_cleanup_empty() -> None:
+    import asyncio
+
+    from onshape_mcp.vision import GeminiWeb
+
+    gw = GeminiWeb()
+    deleted = asyncio.run(gw.cleanup_created_chats())
+    assert deleted == 0
+
+
+def test_manage_chats_importable() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("manage_chats", "scripts/manage_chats.py")
     assert spec is not None

@@ -14,6 +14,7 @@ fi
 
 # shellcheck disable=SC1091
 source .venv/bin/activate
+unset PYTHONPATH
 
 if [ "${1:-}" = "web" ]; then
   exec python3 scripts/web_client.py

@@ -43,9 +43,13 @@ class OnshapeDriver:
 
     async def start(self, headless: bool = True) -> Page:
         self._pw = await async_playwright().start()
-        # Persistent context keeps cache + local storage on disk. Cookies
-        # live in self.cookie_file (plain JSON) because Chrome's encrypted
-        # cookie DB is unusable from headless sessions on Linux.
+        self._clear_stale_locks()
+        # We use the profile dir mainly for the SingletonLock dance and
+        # any future extensions we might want to install. Cache is not
+        # worth the stale-state headaches, so we use a non-persistent
+        # context when possible. Cookies live in self.cookie_file (plain
+        # JSON) and get injected after launch — no need for the profile
+        # to carry the session.
         #
         # Channel strategy: try real Chrome first (no automation markers,
         # dodges Google's "this browser may not be secure" block). Fall
@@ -56,35 +60,57 @@ class OnshapeDriver:
         # headless mode we need to ask explicitly for software WebGL or
         # the canvas stays blank. `swiftshader` is Google's software
         # WebGL implementation and works on any machine.
-        common = dict(
-            user_data_dir=str(self.profile_dir),
-            headless=headless,
-            viewport={"width": 1440, "height": 900},
-            args=[
-                "--use-gl=swiftshader",
-                "--enable-webgl",
-                "--ignore-gpu-blocklist",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
+        common_args = [
+            "--use-gl=swiftshader",
+            "--enable-webgl",
+            "--ignore-gpu-blocklist",
+            "--disable-blink-features=AutomationControlled",
+        ]
         if self.channel in ("auto", "chrome"):
             try:
                 self._ctx = await self._pw.chromium.launch_persistent_context(
-                    **common, channel="chrome"
+                    user_data_dir=str(self.profile_dir),
+                    headless=headless,
+                    viewport={"width": 1440, "height": 900},
+                    args=common_args,
+                    channel="chrome",
                 )
                 self._channel_used = "chrome"
             except Exception as e:
                 if self.channel == "chrome":
                     raise
                 print(f"[driver] real Chrome unavailable ({e}); using bundled Chromium")
-                self._ctx = await self._pw.chromium.launch_persistent_context(**common)
+                self._ctx = await self._pw.chromium.launch_persistent_context(
+                    user_data_dir=str(self.profile_dir),
+                    headless=headless,
+                    viewport={"width": 1440, "height": 900},
+                    args=common_args,
+                )
                 self._channel_used = "chromium"
         else:
-            self._ctx = await self._pw.chromium.launch_persistent_context(**common)
+            self._ctx = await self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(self.profile_dir),
+                headless=headless,
+                viewport={"width": 1440, "height": 900},
+                args=common_args,
+            )
             self._channel_used = "chromium"
         await self._load_cookies()
-        self._page = await self._ctx.new_page()
+        self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
         return self._page
+
+    def _clear_stale_locks(self) -> None:
+        """Remove leftover SingletonLock/SingletonCookie files from prior
+        Chrome runs. Without this, a crashed previous run blocks all
+        subsequent launches of the same profile.
+        """
+        for fname in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            p = self.profile_dir / fname
+            if p.exists():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
     async def _load_cookies(self) -> None:
         """Re-inject saved cookies into the context before any navigation.
@@ -121,7 +147,15 @@ class OnshapeDriver:
     def channel_used(self) -> str:
         return getattr(self, "_channel_used", "unknown")
 
-    async def open(self, url: str = ONSHAPE_URL) -> None:
+    async def open(self, url: str | None = None) -> None:
+        if not url:
+            if settings.onshape_default_doc:
+                doc = settings.onshape_default_doc
+                url = (
+                    doc if doc.startswith("http") else f"https://cad.onshape.com/{doc.lstrip('/')}"
+                )
+            else:
+                url = ONSHAPE_URL
         # Onshape is a SPA that keeps WebSocket connections open, so
         # `networkidle` never fires (it would time out at 60s). We use
         # `load` for the navigation then `wait_for_app()` to confirm the
@@ -129,31 +163,40 @@ class OnshapeDriver:
         await self.page.goto(url, wait_until="load", timeout=60_000)
         await self.wait_for_app()
 
-    # ─── screenshots ─────────────────────────────────────────────────────
+    # Screenshots
 
     async def wait_for_app(self, timeout: float = 30.0) -> bool:
-        """Wait until the Onshape app shell is on screen. The toolbar that
-        holds the sketch/extrude buttons is a reliable marker.
-
-        Returns True if the shell appeared, False if it timed out. Either
-        way we give the SPA a couple more seconds to settle.
+        """Wait until the Onshape app shell has rendered something we can
+        see. The marker is broad: any toolbar button, the documents list,
+        a sketch button, whatever the current page has. Returns True if
+        something rendered, False if the page is still blank after the
+        timeout. Either way we sleep an extra beat for the WebGL canvas.
         """
         try:
-            # The Onshape toolbar contains text like "Sketch" / "Extrude".
-            # We don't care which one; we just want any tool-button rendered.
             await self.page.wait_for_function(
                 """() => {
-                    const btns = document.querySelectorAll('button, [role="button"]');
+                    // any rendered buttons with visible text or aria-label
+                    const btns = document.querySelectorAll('button, [role="button"], a, .document-card, .document-list-item');
+                    let n = 0;
                     for (const b of btns) {
                         const t = (b.textContent || b.getAttribute('aria-label') || '').trim();
-                        if (/^(Sketch|Extrude|Part|Home|Documents?)$/i.test(t)) return true;
+                        if (t.length > 0) n++;
+                        if (n >= 3) return true;
                     }
-                    return false;
+                    // any substantial content (h1-h3, paragraphs, etc.)
+                    const text = document.body.innerText || '';
+                    return text.length > 100;
                 }""",
                 timeout=timeout * 1000,
             )
-            # Belt-and-braces: a beat more for the WebGL canvas to paint.
-            await asyncio.sleep(2.0)
+            # Wait for graphics / loading spinner to clear
+            try:
+                await self.page.locator(".loading-progress-message").wait_for(
+                    state="hidden", timeout=30_000
+                )
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
             return True
         except Exception:
             return False
@@ -171,11 +214,9 @@ class OnshapeDriver:
         return out
 
     async def viewport_box(self) -> dict[str, float]:
-        return await self.page.evaluate(
-            "() => ({w: window.innerWidth, h: window.innerHeight})"
-        )
+        return await self.page.evaluate("() => ({w: window.innerWidth, h: window.innerHeight})")
 
-    # ─── clicks / drags ──────────────────────────────────────────────────
+    # Clicks and drags
 
     async def click(
         self,
@@ -206,7 +247,7 @@ class OnshapeDriver:
     async def hover(self, x: float, y: float) -> None:
         await self.page.mouse.move(x, y)
 
-    # ─── keyboard ────────────────────────────────────────────────────────
+    # Keyboard input
 
     async def type_text(self, text: str, delay_ms: int = 10) -> None:
         await self.page.keyboard.type(text, delay=delay_ms)
@@ -220,7 +261,7 @@ class OnshapeDriver:
         combo = "+".join(keys)
         await self.page.keyboard.press(combo)
 
-    # ─── element finding ─────────────────────────────────────────────────
+    # Element finding
     # Most of the Onshape UI is canvas + custom DOM, so text/aria selectors
     # are the most reliable. We try a few strategies and return the first hit.
 
@@ -241,7 +282,9 @@ class OnshapeDriver:
         if role:
             strategies.append(self.page.get_by_role(role, name=text, exact=not partial))
         # aria-label / title
-        strategies.append(self.page.locator(f"[aria-label*='{text}']" if partial else f"[aria-label='{text}']"))
+        strategies.append(
+            self.page.locator(f"[aria-label*='{text}']" if partial else f"[aria-label='{text}']")
+        )
         # visible text content
         strategies.append(self.page.get_by_text(text, exact=not partial))
         for loc in strategies:
@@ -280,7 +323,7 @@ class OnshapeDriver:
         except Exception:
             return False
 
-    # ─── lifecycle ───────────────────────────────────────────────────────
+    # Lifecycle
 
     async def close(self) -> None:
         if self._ctx is not None:

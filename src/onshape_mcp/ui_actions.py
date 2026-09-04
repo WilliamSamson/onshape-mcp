@@ -26,6 +26,14 @@ class Result:
     screenshot: Path | None = None
     extra: dict[str, Any] | None = None
 
+    @property
+    def summary(self) -> str:
+        return self.note
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        return self.extra or {}
+
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"ok": self.ok, "note": self.note}
         if self.screenshot is not None:
@@ -47,7 +55,8 @@ def _record(tool: str, args: dict[str, Any], result: Result) -> None:
     journal.append(e)
 
 
-# ─── view / camera ────────────────────────────────────────────────────────
+# View and camera
+
 
 async def view_fit(d: OnshapeDriver) -> Result:
     b = binding_for("view.fit")
@@ -73,85 +82,264 @@ async def view_top(d: OnshapeDriver) -> Result:
     return r
 
 
-# ─── sketching ────────────────────────────────────────────────────────────
+async def view_front(d: OnshapeDriver) -> Result:
+    b = binding_for("view.front")
+    if b.keys:
+        await d.press_chord(*b.keys)
+    shot = await d.screenshot("view_front.png")
+    r = Result(True, "front view", shot)
+    _record("view.front", {}, r)
+    return r
 
-async def sketch_start(d: OnshapeDriver, plane_xy: tuple[float, float] | None = None) -> Result:
-    """Click the Sketch button, then click a plane (or pass a coordinate).
 
-    If `plane_xy` is None, we pick the origin of the default top plane by
-    clicking the center of the viewport. For deterministic results, pass
-    the exact pixel.
+async def view_iso(d: OnshapeDriver) -> Result:
+    b = binding_for("view.iso")
+    if b.keys:
+        await d.press_chord(*b.keys)
+    shot = await d.screenshot("view_isometric.png")
+    r = Result(True, "isometric view", shot)
+    _record("view.iso", {}, r)
+    return r
+
+
+view_isometric = view_iso
+
+# Sketching
+
+
+async def sketch_start(
+    d: OnshapeDriver,
+    plane_xy: tuple[float, float] | None = None,
+    plane_name: str | None = None,
+) -> Result:
+    """Click the Sketch button, then click a plane (or pass a coordinate/name).
+
+    If `plane_xy` is None, we select the desired plane in the feature tree
+    using DOM locator (default: Top plane) and press 'n' to orient normal to the sketch plane.
     """
     b = binding_for("sketch.start")
     if b.toolbar_text is None:
         return Result(False, "sketch.start: no toolbar binding")
-    clicked = await d.click_text(b.toolbar_text, timeout_ms=4000)
+    clicked = await d.click_text(b.toolbar_text, timeout_ms=2000)
     if not clicked:
-        return Result(False, f"sketch.start: could not find {b.toolbar_text!r} button")
+        if b.keys:
+            await d.press_chord(*b.keys)
+        else:
+            await d.click(155.0, 58.0)
     # small settle delay for the UI to switch into plane-pick mode
-    await asyncio.sleep(0.3)
-    if plane_xy is None:
-        box = await d.viewport_box()
-        plane_xy = (box["w"] / 2.0, box["h"] / 2.0)
-    await d.click(*plane_xy)
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.4)
+
+    target_name = (plane_name or "Top").capitalize()
+    if plane_xy is not None:
+        await d.click(*plane_xy)
+        await asyncio.sleep(0.4)
+        try:
+            await d.page.locator("canvas").first.hover()
+        except Exception:
+            pass
+        await d.press_key("n")
+    else:
+        # Use exact DOM locator for feature tree plane
+        loc = d.page.locator("span.os-list-item-name", has_text=target_name)
+        if await loc.count() > 0:
+            await loc.first.click()
+            await asyncio.sleep(0.3)
+            # Deterministically orient normal to the selected plane via context menu
+            try:
+                await loc.first.click(button="right")
+                await asyncio.sleep(0.3)
+                normal_item = d.page.locator(
+                    "div.context-menu-item-text", has_text="View normal to"
+                )
+                if await normal_item.count() > 0:
+                    await normal_item.first.click()
+                else:
+                    await d.press_key("n")
+            except Exception:
+                await d.press_key("n")
+        else:
+            await d.click(65.0, 232.0)
+            await asyncio.sleep(0.4)
+            await d.press_key("n")
+    await asyncio.sleep(1.2)
     shot = await d.screenshot("sketch_start.png")
-    r = Result(True, f"sketch started at {plane_xy}", shot, {"click": list(plane_xy)})
-    _record("sketch.start", {"plane_xy": list(plane_xy)}, r)
+    r = Result(True, f"sketch started on {target_name}", shot, {"plane": target_name})
+    _record("sketch.start", {"plane": target_name}, r)
     return r
 
 
+SKETCH_COMMAND_IDS: dict[str, str] = {
+    "sketch.rectangle": "RECTANGLE_TWO_CORNERS",
+    "sketch.circle": "CIRCLE_CENTER_RADIUS",
+    "sketch.line": "LINESEGMENT",
+    "sketch.dimension": "DIMENSION",
+    "sketch.equal": "EQUAL",
+    "sketch.coincident": "COINCIDENT",
+    "feature.extrude": "extrude",
+    "feature.revolve": "revolve",
+}
+
+
 async def _activate_sketch_tool(d: OnshapeDriver, name: str) -> Result:
+    cmd_id = SKETCH_COMMAND_IDS.get(name)
+    if cmd_id:
+        loc = d.page.locator(f"[command-id='{cmd_id}']")
+        if await loc.count() > 0:
+            await loc.first.click()
+            await asyncio.sleep(0.3)
+            return Result(True, f"{name} tool active (command-id: {cmd_id})")
+
     b = binding_for(name)
-    if b.toolbar_text is None:
-        return Result(False, f"{name}: no toolbar binding")
-    clicked = await d.click_text(b.toolbar_text, timeout_ms=3000)
-    if not clicked:
-        return Result(False, f"{name}: toolbar {b.toolbar_text!r} not found")
-    await asyncio.sleep(0.15)
-    return Result(True, f"{name} tool active")
+    if b.keys:
+        await d.press_chord(*b.keys)
+        await asyncio.sleep(0.2)
+        return Result(True, f"{name} tool active (keys: {b.keys})")
+    if b.toolbar_text:
+        clicked = await d.click_text(b.toolbar_text, timeout_ms=3000)
+        if clicked:
+            await asyncio.sleep(0.15)
+            return Result(True, f"{name} tool active")
+    return Result(False, f"{name}: no binding available")
+
+
+async def get_canvas_origin(d: OnshapeDriver) -> tuple[float, float]:
+    """Calculate the exact center point (origin) of the WebGL canvas.
+    Takes into account the left feature panel (246px) and toolbar (76px).
+    """
+    try:
+        box = await d.page.evaluate("""() => {
+            const c = document.querySelector('canvas.os-main-canvas') || document.querySelector('canvas');
+            if (!c) return {cx: 843.0, cy: 473.0};
+            const r = c.getBoundingClientRect();
+            return {cx: r.x + r.width / 2.0, cy: r.y + r.height / 2.0};
+        }""")
+        return (float(box.get("cx", 843.0)), float(box.get("cy", 473.0)))
+    except Exception:
+        return (843.0, 473.0)
+
+
+async def _ensure_viewport_coords(d: OnshapeDriver, pt: tuple[float, float]) -> tuple[float, float]:
+    x, y = pt
+    cx, cy = await get_canvas_origin(d)
+    # If pt is (0, 0), return exact origin
+    if x == 0 and y == 0:
+        return (cx, cy)
+    # If small coordinates (CAD units relative to origin), convert to screen pixels:
+    # In CAD space, +X is right, +Y is up (so screen Y is cy - y*scale)
+    if abs(x) <= 200 and abs(y) <= 200:
+        scale = 10.0 if (abs(x) <= 25 and abs(y) <= 25) else 1.0
+        return (cx + x * scale, cy - y * scale)
+    return (x, y)
 
 
 async def sketch_rectangle(
     d: OnshapeDriver,
-    corner1: tuple[float, float],
-    corner2: tuple[float, float],
+    corner1: tuple[float, float] | None = None,
+    corner2: tuple[float, float] | None = None,
+    width: float | str | None = None,
+    height: float | str | None = None,
+    quadrant: str | int | None = None,
+    centered: bool | None = None,
 ) -> Result:
+    cx, cy = await get_canvas_origin(d)
+    if centered:
+        span = 70.0
+        corner1 = (cx - span, cy - span)
+        corner2 = (cx + span, cy + span)
+    elif quadrant is not None:
+        q = str(quadrant).upper().strip()
+        span_x, span_y = 120.0, 120.0
+        if q in ("1", "I", "TOP-RIGHT", "NE"):
+            corner1 = (cx, cy)
+            corner2 = (cx + span_x, cy - span_y)
+        elif q in ("2", "II", "TOP-LEFT", "NW"):
+            corner1 = (cx, cy)
+            corner2 = (cx - span_x, cy - span_y)
+        elif q in ("3", "III", "BOTTOM-LEFT", "SW"):
+            corner1 = (cx, cy)
+            corner2 = (cx - span_x, cy + span_y)
+        elif q in ("4", "IV", "BOTTOM-RIGHT", "SE"):
+            corner1 = (cx, cy)
+            corner2 = (cx + span_x, cy + span_y)
+
+    c1 = await _ensure_viewport_coords(
+        d, corner1 if corner1 is not None else (cx - 70.0, cy - 70.0)
+    )
+    c2 = await _ensure_viewport_coords(
+        d, corner2 if corner2 is not None else (cx + 70.0, cy + 70.0)
+    )
+
     t = await _activate_sketch_tool(d, "sketch.rectangle")
     if not t.ok:
-        _record("sketch.rectangle", {"corner1": list(corner1), "corner2": list(corner2)}, t)
+        _record("sketch.rectangle", {"corner1": list(c1), "corner2": list(c2)}, t)
         return t
-    await d.click(*corner1)
-    await asyncio.sleep(0.1)
-    await d.click(*corner2)
-    await asyncio.sleep(0.1)
-    # press Esc to drop the rectangle tool (stay in sketch)
+    await d.click(*c1)
+    await asyncio.sleep(0.3)
+    await d.click(*c2)
+    await asyncio.sleep(0.3)
     await d.press_key("Escape")
+    await asyncio.sleep(0.3)
+
+    min_x, max_x = min(c1[0], c2[0]), max(c1[0], c2[0])
+    min_y, max_y = min(c1[1], c2[1]), max(c1[1], c2[1])
+    top_mid = ((min_x + max_x) / 2.0, min_y)
+    left_mid = (min_x, (min_y + max_y) / 2.0)
+
+    # If width or height are specified, apply constraints and dimensions
+    if width is not None and height is not None and str(width).strip() == str(height).strip():
+        # Square: apply Equal constraint first so geometry is strictly equilateral
+        await sketch_equal(d, top_mid, left_mid)
+        await asyncio.sleep(0.5)
+        # Dimension top edge
+        await sketch_dimension(d, top_mid, (top_mid[0], top_mid[1] - 40.0), width)
+    elif width is not None:
+        await sketch_dimension(d, top_mid, (top_mid[0], top_mid[1] - 40.0), width)
+        if height is not None:
+            await sketch_dimension(d, left_mid, (left_mid[0] - 40.0, left_mid[1]), height)
+    elif height is not None:
+        await sketch_dimension(d, left_mid, (left_mid[0] - 40.0, left_mid[1]), height)
+
     shot = await d.screenshot("sketch_rectangle.png")
-    r = Result(True, f"rectangle {corner1} -> {corner2}", shot)
-    _record("sketch.rectangle", {"corner1": list(corner1), "corner2": list(corner2)}, r)
+    meta = {
+        "corner1": list(c1),
+        "corner2": list(c2),
+        "last_vertex": list(c2),
+        "width": width,
+        "height": height,
+        "quadrant": quadrant,
+        "centered": centered,
+    }
+    r = Result(True, f"rectangle {c1} -> {c2} (dim={width}x{height})", shot, meta)
+    _record("sketch.rectangle", meta, r)
     return r
 
 
 async def sketch_circle(
     d: OnshapeDriver,
-    center: tuple[float, float],
-    radius_px: float,
+    center: tuple[float, float] | None = None,
+    radius_px: float = 50.0,
+    centered: bool | None = None,
 ) -> Result:
     t = await _activate_sketch_tool(d, "sketch.circle")
     if not t.ok:
-        _record("sketch.circle", {"center": list(center), "radius_px": radius_px}, t)
+        _record(
+            "sketch.circle", {"center": list(center) if center else None, "radius_px": radius_px}, t
+        )
         return t
-    await d.click(*center)
+    cx, cy = await get_canvas_origin(d)
+    if centered or center is None or center == (0, 0):
+        c = (cx, cy)
+    else:
+        c = await _ensure_viewport_coords(d, center)
+    r_px = radius_px if radius_px > 10 else radius_px * 15.0
+    await d.click(*c)
     await asyncio.sleep(0.1)
-    # Onshape: click-and-drag from center to set radius, OR click center then click on the
-    # circle edge. We do click-edge because it's simpler from a coord-only model.
-    await d.click(center[0] + radius_px, center[1])
+    await d.click(c[0] + r_px, c[1])
     await asyncio.sleep(0.1)
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_circle.png")
-    r = Result(True, f"circle center={center} r={radius_px}", shot)
-    _record("sketch.circle", {"center": list(center), "radius_px": radius_px}, r)
+    r = Result(True, f"circle center={c} r={r_px}", shot)
+    _record("sketch.circle", {"center": list(c), "radius_px": r_px}, r)
     return r
 
 
@@ -164,14 +352,16 @@ async def sketch_line(
     if not t.ok:
         _record("sketch.line", {"p1": list(p1), "p2": list(p2)}, t)
         return t
-    await d.click(*p1)
+    pt1 = await _ensure_viewport_coords(d, p1)
+    pt2 = await _ensure_viewport_coords(d, p2)
+    await d.click(*pt1)
     await asyncio.sleep(0.05)
-    await d.click(*p2)
+    await d.click(*pt2)
     await asyncio.sleep(0.05)
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_line.png")
-    r = Result(True, f"line {p1} -> {p2}", shot)
-    _record("sketch.line", {"p1": list(p1), "p2": list(p2)}, r)
+    r = Result(True, f"line {pt1} -> {pt2}", shot)
+    _record("sketch.line", {"p1": list(pt1), "p2": list(pt2)}, r)
     return r
 
 
@@ -179,7 +369,7 @@ async def sketch_dimension(
     d: OnshapeDriver,
     entity_xy: tuple[float, float],
     label_xy: tuple[float, float],
-    value_mm: float,
+    value_mm: float | str,
 ) -> Result:
     """Add or set a dimension. Click the entity at `entity_xy`, place the
     dimension label at `label_xy`, then type the new value + Enter.
@@ -189,41 +379,47 @@ async def sketch_dimension(
     target mm value. The LLM doesn't need to know the px-to-mm ratio
     because Onshape's solver does the conversion.
     """
-    b = binding_for("sketch.dimension")
-    if b.toolbar_text:
-        ok = await d.click_text(b.toolbar_text, timeout_ms=3000)
-        if not ok and b.keys:
-            await d.press_chord(*b.keys)
-        else:
-            if not ok:
-                return Result(False, f"sketch.dimension: toolbar {b.toolbar_text!r} not found")
-    elif b.keys:
-        await d.press_chord(*b.keys)
-    else:
-        return Result(False, "sketch.dimension: no binding")
-    await asyncio.sleep(0.2)
+    t = await _activate_sketch_tool(d, "sketch.dimension")
+    if not t.ok:
+        return t
+    await asyncio.sleep(0.4)
+    e_xy = await _ensure_viewport_coords(d, entity_xy)
+    l_xy = await _ensure_viewport_coords(d, label_xy)
     # Click the entity (line/edge/circle) to dimension
-    await d.click(*entity_xy)
+    await d.page.mouse.move(*e_xy)
     await asyncio.sleep(0.15)
+    await d.page.mouse.click(*e_xy)
+    await asyncio.sleep(0.4)
     # Click where to place the dimension label
-    await d.click(*label_xy)
-    await asyncio.sleep(0.2)
-    # Type the new value, press Enter
-    await d.type_text(str(value_mm))
-    await d.press_key("Enter")
-    await asyncio.sleep(0.2)
+    await d.page.mouse.move(*l_xy)
+    await asyncio.sleep(0.15)
+    await d.page.mouse.click(*l_xy)
+    await asyncio.sleep(0.4)
+    # Type the new value into input.os-canvas-text-edit if present or directly
+    val_str = f"{value_mm} mm" if isinstance(value_mm, (int, float)) else str(value_mm)
+    dim_input = d.page.locator("input.os-canvas-text-edit")
+    if await dim_input.count() > 0:
+        await dim_input.first.fill(val_str)
+        await asyncio.sleep(0.1)
+        await d.page.keyboard.press("Enter")
+        await asyncio.sleep(0.4)
+    else:
+        await d.type_text(val_str)
+        await asyncio.sleep(0.1)
+        await d.press_key("Enter")
+        await asyncio.sleep(0.4)
     # Esc to drop the dimension tool, stay in sketch
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_dimension.png")
     r = Result(
         True,
-        f"dimensioned {value_mm}mm at {entity_xy}",
+        f"dimensioned {val_str} at {e_xy}",
         shot,
-        {"value_mm": value_mm},
+        {"value": val_str},
     )
     _record(
         "sketch.dimension",
-        {"entity_xy": list(entity_xy), "label_xy": list(label_xy), "value_mm": value_mm},
+        {"entity_xy": list(e_xy), "label_xy": list(l_xy), "value": val_str},
         r,
     )
     return r
@@ -237,54 +433,79 @@ async def sketch_equal(d: OnshapeDriver, *entity_xys: tuple[float, float]) -> Re
     """
     if len(entity_xys) < 2:
         return Result(False, "sketch.equal needs at least 2 entities")
-    b = binding_for("sketch.equal")
-    if b.toolbar_text is None:
-        return Result(False, "sketch.equal: no binding")
-    ok = await d.click_text(b.toolbar_text, timeout_ms=3000)
-    if not ok:
-        return Result(False, f"sketch.equal: toolbar {b.toolbar_text!r} not found")
-    await asyncio.sleep(0.2)
+    t = await _activate_sketch_tool(d, "sketch.equal")
+    if not t.ok:
+        return t
+    await asyncio.sleep(0.4)
     for xy in entity_xys:
-        await d.click(*xy)
-        await asyncio.sleep(0.1)
+        pt = await _ensure_viewport_coords(d, xy)
+        await d.page.mouse.move(*pt)
+        await asyncio.sleep(0.15)
+        await d.page.mouse.click(*pt)
+        await asyncio.sleep(0.3)
     await d.press_key("Escape")
+    await asyncio.sleep(0.4)
     shot = await d.screenshot("sketch_equal.png")
     r = Result(True, f"equal across {len(entity_xys)} entities", shot)
     _record("sketch.equal", {"entities": [list(xy) for xy in entity_xys]}, r)
     return r
 
 
-async def sketch_exit(d: OnshapeDriver) -> Result:
-    """Exit the active sketch. Presses Esc and verifies by screenshot diff."""
+async def sketch_exit(d: OnshapeDriver, commit: bool = True, **_kw) -> Result:
+    """Exit and accept (or cancel) the active sketch."""
     before = await d.screenshot("sketch_exit_before.png")
+    if commit:
+        # Click green checkmark button on dialog
+        ok_btn = d.page.locator(".ns-dialog-button-ok, .button-ok").first
+        if await ok_btn.count() > 0:
+            await ok_btn.click()
+        else:
+            await d.click(424.0, 93.0)
+        await asyncio.sleep(0.5)
+        await d.press_chord("Shift", "Enter")
+    else:
+        cancel_btn = d.page.locator(".ns-dialog-button-cancel, .button-cancel").first
+        if await cancel_btn.count() > 0:
+            await cancel_btn.click()
+        else:
+            await d.press_key("Escape")
+    await asyncio.sleep(0.5)
     await d.press_key("Escape")
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.5)
     after = await d.screenshot("sketch_exit_after.png")
-    r = Result(True, "exit sketch (Esc)", after, {"before": str(before), "after": str(after)})
-    _record("sketch.exit", {}, r)
+    r = Result(
+        True, "exit sketch", after, {"before": str(before), "after": str(after), "commit": commit}
+    )
+    _record("sketch.exit", {"commit": commit}, r)
     return r
 
 
-# ─── features ─────────────────────────────────────────────────────────────
+# Feature tools
+
 
 async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Result:
     """Extrude the active sketch region. If depth is None, opens the
     extrude dialog and screenshots so the LLM loop can type a value.
     """
     b = binding_for("feature.extrude")
-    if b.toolbar_text:
-        clicked = await d.click_text(b.toolbar_text, timeout_ms=3000)
-        if not clicked and b.keys:
-            await d.press_chord(*b.keys)
-    elif b.keys:
+    if b.keys:
         await d.press_chord(*b.keys)
+    elif b.toolbar_text:
+        clicked = await d.click_text(b.toolbar_text, timeout_ms=3000)
+        if not clicked:
+            return Result(False, f"feature.extrude: toolbar {b.toolbar_text!r} not found")
     else:
         return Result(False, "feature.extrude: no binding")
-    await asyncio.sleep(0.4)  # dialog open animation
+    await asyncio.sleep(0.5)  # dialog open animation
     if depth_mm is not None:
         await d.type_text(str(depth_mm))
         await d.press_key("Enter")
         await asyncio.sleep(0.3)
+        # Click green checkmark to commit feature
+        await d.click(294.0, 105.0)
+        await asyncio.sleep(0.3)
+        await d.press_chord("Shift", "Enter")
+        await asyncio.sleep(0.5)
     shot = await d.screenshot("feature_extrude.png")
     r = Result(True, f"extrude depth={depth_mm}", shot)
     _record("feature.extrude", {"depth_mm": depth_mm}, r)
@@ -330,7 +551,8 @@ async def feature_chamfer(d: OnshapeDriver, distance_mm: float | None = None) ->
     return r
 
 
-# ─── selection ────────────────────────────────────────────────────────────
+# Selection
+
 
 async def select_face(d: OnshapeDriver, x: float, y: float) -> Result:
     """Click in the viewport to select a face. Best-effort: the face at
@@ -353,7 +575,8 @@ async def select_edge(d: OnshapeDriver, x: float, y: float) -> Result:
     return r
 
 
-# ─── global undo/redo ─────────────────────────────────────────────────────
+# Global undo and redo
+
 
 async def undo(d: OnshapeDriver) -> Result:
     b = binding_for("ui.undo")
@@ -372,4 +595,62 @@ async def redo(d: OnshapeDriver) -> Result:
     shot = await d.screenshot("redo.png")
     r = Result(True, "redo", shot)
     _record("ui.redo", {}, r)
+    return r
+
+
+async def wait(d: OnshapeDriver, seconds: float = 1.0) -> Result:
+    """No-op pause. Useful when the LLM wants to let a dialog animation
+    finish, or just look at the current state again on the next step."""
+    await asyncio.sleep(max(0.0, seconds))
+    shot = await d.screenshot("wait.png")
+    r = Result(True, f"waited {seconds}s", shot)
+    _record("ui.wait", {"seconds": seconds}, r)
+    return r
+
+
+async def screenshot_only(d: OnshapeDriver, name: str = "agent.png") -> Result:
+    """Bare screenshot without any other action. Lets the LLM re-observe
+    the viewport without doing anything else."""
+    shot = await d.screenshot(name)
+    r = Result(True, f"screenshot {name}", shot)
+    _record("screenshot", {"name": name}, r)
+    return r
+
+
+async def doc_open(d: OnshapeDriver, url: str) -> Result:
+    """Navigate to a specific Onshape document URL. Pass either a full
+    URL or a `d/<docId>/e/<elementId>` path. Usually elementId is a
+    Part Studio — if the document has one, deep-link to it directly.
+    """
+    if not url:
+        return Result(False, "doc.open: missing url")
+    full = url if url.startswith("http") else f"https://cad.onshape.com/{url.lstrip('/')}"
+    await d.open(full)
+    shot = await d.screenshot("doc_open.png")
+    r = Result(True, f"opened {full}", shot, {"url": full})
+    _record("doc.open", {"url": full}, r)
+    return r
+
+
+async def doc_new(d: OnshapeDriver) -> Result:
+    """Click the Onshape "Create" / new document button. Lands in a fresh
+    Part Studio, which is where sketch + feature tools work.
+    """
+    try:
+        # Click Create dropdown button at top-left
+        await d.click(75, 70)
+        await asyncio.sleep(0.5)
+        # Click "Document..." item
+        await d.click(75, 110)
+        await asyncio.sleep(1.0)
+        await d.type_text("PartStudio")
+        await asyncio.sleep(0.2)
+        await d.press_key("Enter")
+        await d.page.wait_for_url("**/documents/**/e/**", timeout=30000)
+        await d.wait_for_app()
+    except Exception as e:
+        return Result(False, f"doc.new failed: {e}")
+    shot = await d.screenshot("doc_new.png")
+    r = Result(True, "new document", shot)
+    _record("doc.new", {}, r)
     return r

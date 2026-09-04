@@ -17,9 +17,7 @@ async def main() -> None:
     if not img.exists():
         raise SystemExit(f"image not found: {img}")
     g = GeminiWeb()
-    answer = await g.ask_with_image(
-        "Describe what you see in one short paragraph.", img
-    )
+    answer = await g.ask_with_image("Describe what you see in one short paragraph.", img)
     print(answer)
     await g.close()
 

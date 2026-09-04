@@ -43,7 +43,9 @@ async def main() -> int:
 
     print(f"[extract_gemini_cookies] opening headed browser, profile={profile_dir}")
     print("[extract_gemini_cookies] log into gemini.google.com in the opened window.")
-    print("[extract_gemini_cookies] when you see the Gemini chat UI, come back here and press Enter.")
+    print(
+        "[extract_gemini_cookies] when you see the Gemini chat UI, come back here and press Enter."
+    )
 
     async with async_playwright() as p:
         # Try your real Chrome first. Google blocks automated Chromium

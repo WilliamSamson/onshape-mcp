@@ -11,7 +11,6 @@ not yet verified), low (guess based on convention).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 
 @dataclass
@@ -23,13 +22,13 @@ class Binding:
     confidence: str = "medium"
 
 
-# ─── view / camera ────────────────────────────────────────────────────────
+# View and camera
 VIEW_FIT = Binding(keys=("f",), confidence="high", notes="Fit all; 'F' in viewport")
 VIEW_TOP = Binding(keys=("7",), confidence="low")
 VIEW_FRONT = Binding(keys=("1",), confidence="low")
-VIEW_ISO = Binding(keys=("F2",), confidence="low")
+VIEW_ISO = Binding(keys=("Shift", "7"), confidence="high", notes="Isometric view: Shift+7")
 
-# ─── sketching ────────────────────────────────────────────────────────────
+# Sketching
 # Onshape sketch tools: you click the tool in the left toolbar, then click
 # in the viewport. There isn't a universal "start sketch" shortcut. You
 # click the sketch button or a plane, then a tool.
@@ -40,19 +39,32 @@ SKETCH_START = Binding(
     notes="Click the 'Sketch' button in the left toolbar, then click a plane or face.",
 )
 SKETCH_RECTANGLE = Binding(
+    keys=("g",),
     toolbar_text="Rectangle",
     toolbar_role="button",
     confidence="high",
-    notes="After entering a sketch, click the rectangle tool, then click 2 corners.",
+    notes="Corner rectangle shortcut 'g'.",
 )
-SKETCH_CIRCLE = Binding(toolbar_text="Circle", toolbar_role="button", confidence="high")
-SKETCH_LINE = Binding(toolbar_text="Line", toolbar_role="button", confidence="high")
+SKETCH_CIRCLE = Binding(
+    keys=("c",),
+    toolbar_text="Circle",
+    toolbar_role="button",
+    confidence="high",
+    notes="Center point circle shortcut 'c'.",
+)
+SKETCH_LINE = Binding(
+    keys=("l",),
+    toolbar_text="Line",
+    toolbar_role="button",
+    confidence="high",
+    notes="Line tool shortcut 'l'.",
+)
 SKETCH_SPLINE = Binding(toolbar_text="Spline", toolbar_role="button", confidence="medium")
 SKETCH_DIMENSION = Binding(
     keys=("d",),
     toolbar_text="Dimension",
     toolbar_role="button",
-    confidence="medium",
+    confidence="high",
     notes="In a sketch only. Workflow: activate, click the entity to dimension, click where to place the label, type the value, press Enter.",
 )
 SKETCH_MIRROR = Binding(toolbar_text="Mirror", toolbar_role="button", confidence="medium")
@@ -62,13 +74,13 @@ SKETCH_EXIT = Binding(
     notes="Press Esc to exit the current sketch tool. May need 2 presses if a subtool is active.",
 )
 
-# ─── features ─────────────────────────────────────────────────────────────
+# Feature tools
 FEATURE_EXTRUDE = Binding(
-    keys=("e",),
+    keys=("Shift", "e"),
     toolbar_text="Extrude",
     toolbar_role="button",
     confidence="high",
-    notes="With a closed sketch region selected, press E or click Extrude.",
+    notes="With a closed sketch region selected, press Shift+E or click Extrude.",
 )
 FEATURE_REVOLVE = Binding(
     keys=("r",),
@@ -88,18 +100,21 @@ FEATURE_SHELL = Binding(toolbar_text="Shell", toolbar_role="button", confidence=
 FEATURE_PATTERN = Binding(toolbar_text="Pattern", toolbar_role="button", confidence="medium")
 FEATURE_MIRROR_BODY = Binding(toolbar_text="Mirror", toolbar_role="button", confidence="medium")
 
-# ─── assembly / meta ──────────────────────────────────────────────────────
+# Assembly and meta
 ASSEMBLY_MATE = Binding(toolbar_text="Mate", toolbar_role="button", confidence="high")
 ASSEMBLY_PATTERN = Binding(toolbar_text="Pattern", toolbar_role="button", confidence="medium")
 
-# ─── global ───────────────────────────────────────────────────────────────
+# Global bindings
 UNDO = Binding(keys=("Control", "z"), confidence="high")
 REDO = Binding(keys=("Control", "shift", "z"), confidence="high")
-SAVE = Binding(keys=("Control", "s"), confidence="high", notes="Onshape auto-saves; this is a no-op but the shortcut still works.")
+SAVE = Binding(
+    keys=("Control", "s"),
+    confidence="high",
+    notes="Onshape auto-saves; this is a no-op but the shortcut still works.",
+)
 DESELECT = Binding(keys=("Escape",), confidence="high")
 CONFIRM = Binding(keys=("Enter",), confidence="high")
 DELETE = Binding(keys=("Delete",), confidence="high")
-
 
 # Map datasheet tool name -> binding.
 BINDINGS: dict[str, Binding] = {
@@ -107,6 +122,7 @@ BINDINGS: dict[str, Binding] = {
     "view.top": VIEW_TOP,
     "view.front": VIEW_FRONT,
     "view.iso": VIEW_ISO,
+    "view.isometric": VIEW_ISO,
     "view.rotate": Binding(
         notes="Middle-mouse drag (no fixed coords). The LLM passes start/end via the call.",
         confidence="high",
@@ -142,12 +158,24 @@ BINDINGS: dict[str, Binding] = {
     "assembly.pattern": ASSEMBLY_PATTERN,
     # Selection is just a click. No shortcut or button. The binding is the
     # act of clicking a coordinate in the viewport; ui_actions handles it.
-    "select.face": Binding(notes="Click in viewport at (x,y); ui_actions handles the click.", confidence="high"),
+    "select.face": Binding(
+        notes="Click in viewport at (x,y); ui_actions handles the click.", confidence="high"
+    ),
     "select.edge": Binding(notes="Click in viewport at (x,y).", confidence="high"),
     "select.body": Binding(notes="Click in viewport or in the feature tree.", confidence="high"),
     "ui.undo": UNDO,
     "ui.redo": REDO,
+    "ui.wait": Binding(
+        notes="No-op. Pauses for N seconds and screenshots. Use when the LLM wants to re-observe the viewport.",
+        confidence="high",
+    ),
     "doc.save": SAVE,
+    "doc.new": Binding(
+        toolbar_text="Create",
+        toolbar_role="button",
+        notes="Create a new document. Or just navigate to /documents/new.",
+        confidence="medium",
+    ),
     "ui.deselect": DESELECT,
     "ui.confirm": CONFIRM,
     "ui.delete": DELETE,

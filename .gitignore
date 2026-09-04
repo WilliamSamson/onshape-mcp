@@ -1,7 +1,5 @@
-# ─────────────────────────────────────────────────────────────
 # onshape-mcp — DO NOT COMMIT secrets, sessions, logs, or state.
 # Everything in this .gitignore is intentionally local-only.
-# ─────────────────────────────────────────────────────────────
 
 # Env / secrets
 .env

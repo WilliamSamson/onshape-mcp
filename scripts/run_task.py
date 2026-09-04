@@ -37,7 +37,9 @@ async def main(goal: str, max_steps: int = 25) -> int:
         if rec.error:
             print(f"  step {rec.step}: ERROR {rec.error} ({rec.elapsed_s:.1f}s)")
         elif rec.decision.get("done"):
-            print(f"  step {rec.step}: DONE — {rec.decision.get('summary', '')} ({rec.elapsed_s:.1f}s)")
+            print(
+                f"  step {rec.step}: DONE — {rec.decision.get('summary', '')} ({rec.elapsed_s:.1f}s)"
+            )
         else:
             tool = rec.decision.get("tool")
             args = rec.decision.get("args", {})
@@ -52,6 +54,7 @@ async def main(goal: str, max_steps: int = 25) -> int:
 def json_compact(d: dict) -> str:
     try:
         import json
+
         return json.dumps(d, ensure_ascii=False)
     except Exception:
         return str(d)

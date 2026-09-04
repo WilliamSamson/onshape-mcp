@@ -15,14 +15,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .config import settings
 from .dispatch import build_agent_system_prompt, dispatch, parse_decision
 from .driver import OnshapeDriver
-from .journal import JournalEntry, journal
 from .vision import GeminiWeb
 
-
-STUCK_THRESHOLD = 3  # unchanged screenshots in a row -> stop
+STUCK_THRESHOLD = 5  # unchanged screenshots in a row -> stop
 
 
 @dataclass
@@ -67,6 +64,10 @@ class AgentLoop:
             await self.driver.open()
         if self.vision is None:
             self.vision = GeminiWeb()
+        # Warm the vision client. The first call has higher latency
+        # because of init + token exchange. Doing it before the loop
+        # keeps the per-step timing predictable.
+        await self.vision._ensure_client()
         return self.driver, self.vision
 
     async def close(self) -> None:
@@ -83,6 +84,15 @@ class AgentLoop:
         last_hash: str | None = None
         unchanged = 0
 
+        system_prompt = build_agent_system_prompt()
+        history: list[dict[str, Any]] = []
+
+        # Maintain a single chat session for this task run to prevent
+        # spawning multiple separate chats per step.
+        chat_session = await v.new_session()
+
+        last_vertex: tuple[float, float] | None = None
+
         for step in range(max_steps):
             t0 = time.monotonic()
             shot = await d.screenshot(f"task_step_{step:02d}.png")
@@ -96,35 +106,79 @@ class AgentLoop:
                 unchanged = 0
             last_hash = h
 
+            history_text = ""
+            for r in history[-3:]:
+                history_text += f"\nStep {r['step']}: {r['decision']}\n"
+            vertex_text = f"\nLast drawn vertex on canvas: {last_vertex}\n" if last_vertex else ""
             prompt = (
+                f"{system_prompt}\n\n"
+                f"---\n"
                 f"User goal: {goal}\n\n"
-                f"Step {step + 1}/{max_steps}. Look at the screenshot and reply with JSON: "
+                f"Recent action history:{history_text}{vertex_text}\n"
+                f"Step {step + 1}/{max_steps}. Look at the latest screenshot. "
+                "Reply ONLY with a JSON object: "
                 '{"tool": "<tool_name>", "args": {...}} OR {"done": true, "summary": "..."}'
             )
             try:
-                answer = await v.ask_with_image(prompt, shot)
+                answer = await v.ask_with_image(prompt, shot, session=chat_session)
             except Exception as e:
-                result.steps.append(StepRecord(step, {"error": f"vision: {e}"}, ok=False, error=str(e), elapsed_s=time.monotonic() - t0))
+                result.steps.append(
+                    StepRecord(
+                        step,
+                        {"error": f"vision: {e}"},
+                        ok=False,
+                        error=str(e),
+                        elapsed_s=time.monotonic() - t0,
+                    )
+                )
                 result.stop_reason = f"vision error: {e}"
                 break
 
             decision = parse_decision(answer)
+            history.append({"step": step, "decision": decision})
             if decision.get("done"):
+                if str(decision.get("summary", "")).startswith("Could not parse decision"):
+                    rec = StepRecord(
+                        step,
+                        decision,
+                        ok=False,
+                        error=decision.get("summary"),
+                        elapsed_s=time.monotonic() - t0,
+                    )
+                    result.steps.append(rec)
+                    continue
                 result.completed = True
-                result.steps.append(StepRecord(step, decision, ok=True, elapsed_s=time.monotonic() - t0))
+                result.steps.append(
+                    StepRecord(step, decision, ok=True, elapsed_s=time.monotonic() - t0)
+                )
                 break
 
             tool = decision.get("tool")
             args = decision.get("args", {}) or {}
-            rec = StepRecord(step, {"tool": tool, "args": args}, ok=True, elapsed_s=time.monotonic() - t0)
+            rec = StepRecord(
+                step, {"tool": tool, "args": args}, ok=True, elapsed_s=time.monotonic() - t0
+            )
             try:
-                await dispatch(d, tool, args)
-                journal.append(JournalEntry.new(tool or "?", args))
+                action_res = await dispatch(d, tool, args)
+                if (
+                    hasattr(action_res, "meta")
+                    and isinstance(action_res.meta, dict)
+                    and "last_vertex" in action_res.meta
+                ):
+                    last_vertex = tuple(action_res.meta["last_vertex"])
             except Exception as e:
                 rec.ok = False
                 rec.error = f"{type(e).__name__}: {e}"
             rec.elapsed_s = time.monotonic() - t0
             result.steps.append(rec)
+            if rec.ok:
+                unchanged = 0
+            status_str = (
+                f"ERROR {rec.error}"
+                if rec.error
+                else f"{tool}({json.dumps(args, ensure_ascii=False)})"
+            )
+            print(f"  step {step}: {status_str} ({rec.elapsed_s:.1f}s)", flush=True)
             # brief beat so the UI has time to paint
             await asyncio.sleep(0.4)
 
