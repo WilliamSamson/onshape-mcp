@@ -117,17 +117,21 @@ async def sketch_start(
     If `plane_xy` is None, we select the desired plane in the feature tree
     using DOM locator (default: Top plane) and press 'n' to orient normal to the sketch plane.
     """
-    b = binding_for("sketch.start")
-    if b.toolbar_text is None:
-        return Result(False, "sketch.start: no toolbar binding")
-    clicked = await d.click_text(b.toolbar_text, timeout_ms=2000)
-    if not clicked:
-        if b.keys:
-            await d.press_chord(*b.keys)
-        else:
-            await d.click(155.0, 58.0)
+    sketch_btn = d.page.locator("[command-id='newSketch']")
+    if await sketch_btn.count() > 0:
+        await sketch_btn.first.click()
+    else:
+        b = binding_for("sketch.start")
+        clicked = False
+        if b.toolbar_text:
+            clicked = await d.click_text(b.toolbar_text, timeout_ms=500)
+        if not clicked:
+            if b.keys:
+                await d.press_chord(*b.keys)
+            else:
+                await d.click(155.0, 58.0)
     # small settle delay for the UI to switch into plane-pick mode
-    await asyncio.sleep(0.4)
+    await asyncio.sleep(0.3)
 
     target_name = (plane_name or "Top").capitalize()
     if plane_xy is not None:
@@ -169,6 +173,7 @@ async def sketch_start(
 
 
 SKETCH_COMMAND_IDS: dict[str, str] = {
+    "sketch.start": "newSketch",
     "sketch.rectangle": "RECTANGLE_TWO_CORNERS",
     "sketch.circle": "CIRCLE_CENTER_RADIUS",
     "sketch.line": "LINESEGMENT",
