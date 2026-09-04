@@ -38,12 +38,13 @@ class LoopResult:
     completed: bool = False
     final_screenshot: Path | None = None
     stop_reason: str = ""
+    total_elapsed_s: float = 0.0
 
     def summary(self) -> str:
         if self.completed:
             last = self.steps[-1].decision if self.steps else {}
-            return f"completed in {len(self.steps)} steps: {last.get('summary', '')}"
-        return f"stopped ({self.stop_reason}) after {len(self.steps)} steps"
+            return f"completed in {len(self.steps)} steps ({self.total_elapsed_s:.1f}s): {last.get('summary', '')}"
+        return f"stopped ({self.stop_reason}) after {len(self.steps)} steps ({self.total_elapsed_s:.1f}s)"
 
 
 class AgentLoop:
@@ -79,6 +80,7 @@ class AgentLoop:
             self.driver = None
 
     async def run(self, goal: str, max_steps: int = 25) -> LoopResult:
+        run_t0 = time.monotonic()
         d, v = await self._ensure()
         result = LoopResult(goal=goal)
         last_hash: str | None = None
@@ -183,6 +185,7 @@ class AgentLoop:
             await asyncio.sleep(0.4)
 
         result.final_screenshot = await d.screenshot("task_final.png")
+        result.total_elapsed_s = time.monotonic() - run_t0
         if not result.completed and not result.stop_reason:
             result.stop_reason = f"max_steps ({max_steps}) reached"
         return result

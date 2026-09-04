@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -27,10 +28,12 @@ from onshape_mcp.loop import AgentLoop  # noqa: E402
 
 
 async def main(goal: str, max_steps: int = 25, clean: bool = False) -> int:
+    t_start = time.monotonic()
     loop = AgentLoop()
     try:
         if clean:
             import re
+
             d, _ = await loop._ensure()
             page = d.page
             for _ in range(15):
@@ -47,6 +50,7 @@ async def main(goal: str, max_steps: int = 25, clean: bool = False) -> int:
     finally:
         await loop.close()
 
+    total_wall_s = time.monotonic() - t_start
     for rec in result.steps:
         if rec.error:
             print(f"  step {rec.step}: ERROR {rec.error} ({rec.elapsed_s:.1f}s)")
@@ -61,6 +65,7 @@ async def main(goal: str, max_steps: int = 25, clean: bool = False) -> int:
 
     print()
     print(f"=== {result.summary()} ===")
+    print(f"Total wall time: {total_wall_s:.1f}s (Agent loop: {result.total_elapsed_s:.1f}s)")
     print(f"final screenshot: {result.final_screenshot}")
     return 0 if result.completed else 1
 
