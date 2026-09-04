@@ -62,31 +62,25 @@ class GeminiWeb:
         # Prefer letting the library use browser-cookie3 directly. It
         # grabs the full Chrome session (PSID, PSIDTS, PSIDCC, third-party
         # cookies) and decrypts via the keyring, which is the path that
-        # works for the multimodal (image upload) endpoint.
-        psid = psidts = None
+        # works reliably for the multimodal (image upload) endpoint.
+        try:
+            client = GeminiClient(None, None, model=self.model)
+            await client.init(timeout=15)
+            self._client = client
+            return
+        except Exception as e:
+            print(f"[vision] live browser session init note ({e}); trying cookie file")
+
+        # Fallback to explicit cookie file if browser-cookie3 could not read Chrome
         if self._has_cookie_file():
             data = json.loads(self.cookie_file.read_text(encoding="utf-8"))
             psid = data.get("secure_1psid") or data.get("__Secure-1PSID")
             psidts = data.get("secure_1psidts") or data.get("__Secure-1PSIDTS")
-            # Try the explicit path first. If image upload fails we'll
-            # fall back to browser-cookie3.
             self._client = GeminiClient(psid, psidts, model=self.model)
-            try:
-                await self._client.init(timeout=30)
-                return
-            except Exception as e:
-                print(
-                    f"[vision] explicit-cookie init failed ({e}); falling back to browser-cookie3"
-                )
-                try:
-                    await self._client.close()
-                except Exception:
-                    pass
-                self._client = None
+            await self._client.init(timeout=30)
+            return
 
-        # Fallback: empty client -> library reads Chrome directly.
-        self._client = GeminiClient(None, None, model=self.model)
-        await self._client.init(timeout=30)
+        raise RuntimeError("No valid Gemini credentials found (neither live Chrome nor cookie file).")
 
     async def _refresh_cookies_from_chrome(self) -> bool:
         """Re-extract Gemini cookies from the user's real Chrome. The

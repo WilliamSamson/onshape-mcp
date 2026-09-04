@@ -120,7 +120,7 @@ class AgentLoop:
                 '{"tool": "<tool_name>", "args": {...}} OR {"done": true, "summary": "..."}'
             )
             try:
-                answer = await v.ask_with_image(prompt, shot, session=chat_session)
+                answer = await v.ask_with_image(prompt, shot)
             except Exception as e:
                 result.steps.append(
                     StepRecord(

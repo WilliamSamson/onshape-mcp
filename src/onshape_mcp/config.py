@@ -49,7 +49,7 @@ class Settings:
     gemini_cookie_file: Path = _path("GEMINI_COOKIE_FILE", "./cookies/gemini.cookies.json")
     journal_dir: Path = _path("JOURNAL_DIR", "./state")
     log_dir: Path = _path("LOG_DIR", "./logs")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-flash")
     gemini_temporary_chat: bool = _bool("GEMINI_TEMPORARY_CHAT", True)
     gemini_auto_cleanup: bool = _bool("GEMINI_AUTO_CLEANUP", True)
     onshape_default_doc: str = os.getenv("ONSHAPE_DEFAULT_DOC", "")

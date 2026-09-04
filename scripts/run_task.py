@@ -26,9 +26,23 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from onshape_mcp.loop import AgentLoop  # noqa: E402
 
 
-async def main(goal: str, max_steps: int = 25) -> int:
+async def main(goal: str, max_steps: int = 25, clean: bool = False) -> int:
     loop = AgentLoop()
     try:
+        if clean:
+            import re
+            d, _ = await loop._ensure()
+            page = d.page
+            for _ in range(15):
+                loc = page.locator("span.os-list-item-name").filter(
+                    has_text=re.compile(r"^(Sketch|Extrude)")
+                )
+                if await loc.count() == 0:
+                    break
+                await loc.first.click()
+                await asyncio.sleep(0.2)
+                await page.keyboard.press("Delete")
+                await asyncio.sleep(0.4)
         result = await loop.run(goal, max_steps=max_steps)
     finally:
         await loop.close()
@@ -62,8 +76,10 @@ def json_compact(d: dict) -> str:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("usage: python3 scripts/run_task.py '<goal>' [max_steps]")
+        print("usage: python3 scripts/run_task.py '<goal>' [max_steps] [--clean]")
         raise SystemExit(2)
-    goal = sys.argv[1]
-    max_steps = int(sys.argv[2]) if len(sys.argv) > 2 else 25
-    raise SystemExit(asyncio.run(main(goal, max_steps)))
+    clean = "--clean" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--clean"]
+    goal = args[0]
+    max_steps = int(args[1]) if len(args) > 1 else 25
+    raise SystemExit(asyncio.run(main(goal, max_steps, clean=clean)))
