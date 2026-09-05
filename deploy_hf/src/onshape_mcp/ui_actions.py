@@ -133,12 +133,14 @@ async def sketch_start(
     d: OnshapeDriver,
     plane_xy: tuple[float, float] | None = None,
     plane_name: str | None = None,
+    plane: str | None = None,
 ) -> Result:
     """Click the Sketch button, then click a plane (or pass a coordinate/name).
 
     If `plane_xy` is None, we select the desired plane in the feature tree
     using DOM locator (default: Top plane) and press 'n' to orient normal to the sketch plane.
     """
+    target_plane = plane or plane_name or "Top"
     sketch_btn = d.page.locator("[command-id='newSketch']")
     if await sketch_btn.count() > 0:
         await sketch_btn.first.click()
@@ -155,7 +157,7 @@ async def sketch_start(
     # small settle delay for the UI to switch into plane-pick mode
     await asyncio.sleep(0.3)
 
-    target_name = (plane_name or "Top").capitalize()
+    target_name = target_plane.capitalize()
     if plane_xy is not None:
         await d.click(*plane_xy)
         await asyncio.sleep(0.4)
