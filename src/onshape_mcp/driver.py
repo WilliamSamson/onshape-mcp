@@ -117,13 +117,41 @@ class OnshapeDriver:
         Without this, even a logged-in session looks anonymous because
         Chrome's encrypted DB can't be read headless.
         """
-        if not self.cookie_file.exists():
-            return
-        try:
-            raw = json.loads(self.cookie_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"[driver] cookie file unreadable ({e}); ignoring")
-            return
+        raw = []
+        if self.cookie_file.exists():
+            try:
+                raw = json.loads(self.cookie_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"[driver] cookie file unreadable ({e}); ignoring")
+        if not raw:
+            # Auto-extract from Chrome if file is missing or empty
+            try:
+                import browser_cookie3
+
+                cj = browser_cookie3.chrome(domain_name="onshape.com")
+                for c in cj:
+                    cookie = {
+                        "name": c.name,
+                        "value": c.value,
+                        "domain": c.domain,
+                        "path": c.path,
+                        "secure": bool(c.secure),
+                        "httpOnly": bool(
+                            c.has_nonstandard_attr("HttpOnly")
+                            or c.has_nonstandard_attr("httponly")
+                        ),
+                    }
+                    if c.expires:
+                        cookie["expires"] = float(c.expires)
+                    raw.append(cookie)
+                if raw:
+                    self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
+                    self.cookie_file.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+                    print(
+                        f"[driver] auto-synced {len(raw)} Onshape cookies from Chrome to {self.cookie_file.name}"
+                    )
+            except Exception as e:
+                print(f"[driver] could not extract Onshape cookies from Chrome: {e}")
         if not raw:
             return
         # Playwright's add_cookies wants the same shape it returns.
@@ -162,6 +190,11 @@ class OnshapeDriver:
         # toolbar is actually on screen.
         await self.page.goto(url, wait_until="load", timeout=60_000)
         await self.wait_for_app()
+        if "signin" in self.page.url:
+            raise RuntimeError(
+                "Onshape redirected to signin page. Cookies may be invalid or expired. "
+                "Please log in to cad.onshape.com in Google Chrome."
+            )
 
     # Screenshots
 
