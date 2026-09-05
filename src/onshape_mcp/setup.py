@@ -138,34 +138,28 @@ def configure_claude_desktop(
     use_local_env: bool = False,
     auto_yes: bool = False,
 ) -> Path | None:
-    """Auto-configure Claude Desktop config file with the onshape-mcp server entry."""
-    print("[4/4] Configuring Claude Desktop integration...")
-    config_path = get_claude_desktop_config_path()
+    path = get_claude_desktop_config_path()
+    _write_mcp_json(path, doc_url)
+    return path
 
-    if not auto_yes:
-        choice = input(
-            f"  [?] Auto-configure Claude Desktop at:\n      {config_path}\n      Apply configuration? [Y/n]: "
-        ).strip().lower()
-        if choice in ("n", "no"):
-            print("  Skipped Claude Desktop configuration.")
-            return None
 
-    # Load existing config or create new
+def _write_mcp_json(config_path: Path, doc_url: str = "") -> bool:
+    """Helper to safely read, backup, and inject the onshape MCP entry into any mcp.json file."""
     data: dict[str, Any] = {}
     if config_path.exists():
         try:
-            # Backup first
             bak_path = config_path.with_suffix(".json.bak")
             shutil.copy2(config_path, bak_path)
             data = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"  ⚠ Existing Claude config was not valid JSON ({e}); creating fresh config.")
+        except Exception:
             data = {}
+
+    if not isinstance(data, dict):
+        data = {}
 
     if "mcpServers" not in data:
         data["mcpServers"] = {}
 
-    # Define onshape server configuration
     server_entry: dict[str, Any] = {
         "command": "uvx",
         "args": [
@@ -174,7 +168,6 @@ def configure_claude_desktop(
             "onshape-mcp",
         ],
     }
-
     if doc_url:
         server_entry["env"] = {"ONSHAPE_DEFAULT_DOC": doc_url}
 
@@ -182,8 +175,85 @@ def configure_claude_desktop(
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    print(f"  ✓ Added 'onshape' server to Claude Desktop config at:\n    {config_path}")
-    return config_path
+    return True
+
+
+def detect_supported_clients() -> list[tuple[str, Path]]:
+    """Detect all installed AI clients (Claude Desktop, Cursor, Windsurf, VS Code Cline)."""
+    clients: list[tuple[str, Path]] = []
+
+    # 1. Claude Desktop
+    claude_cfg = get_claude_desktop_config_path()
+    if claude_cfg.parent.exists() or claude_cfg.exists():
+        clients.append(("Claude Desktop", claude_cfg))
+
+    # 2. Cursor IDE
+    cursor_dir = Path.home() / ".cursor"
+    cursor_cfg = cursor_dir / "mcp.json"
+    if cursor_dir.exists() or cursor_cfg.exists():
+        clients.append(("Cursor IDE", cursor_cfg))
+
+    # 3. Windsurf
+    windsurf_dir = Path.home() / ".codeium" / "windsurf"
+    windsurf_cfg = windsurf_dir / "mcp_config.json"
+    if windsurf_dir.exists() or windsurf_cfg.exists():
+        clients.append(("Windsurf IDE", windsurf_cfg))
+
+    # 4. VS Code (Cline extension)
+    system = platform.system()
+    if system == "Darwin":
+        vscode_base = Path.home() / "Library" / "Application Support" / "Code"
+    elif system == "Windows":
+        app_data = os.environ.get("APPDATA")
+        vscode_base = (Path(app_data) if app_data else Path.home() / "AppData" / "Roaming") / "Code"
+    else:
+        xdg_config = os.environ.get("XDG_CONFIG_HOME")
+        vscode_base = (Path(xdg_config) if xdg_config else Path.home() / ".config") / "Code"
+
+    cline_cfg = vscode_base / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json"
+    if cline_cfg.parent.exists() or cline_cfg.exists():
+        clients.append(("VS Code (Cline)", cline_cfg))
+
+    roo_cfg = vscode_base / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "settings" / "cline_mcp_settings.json"
+    if roo_cfg.parent.exists() or roo_cfg.exists():
+        clients.append(("VS Code (Roo Code)", roo_cfg))
+
+    return clients
+
+
+def configure_detected_clients(
+    doc_url: str = "",
+    auto_yes: bool = False,
+) -> list[str]:
+    """Auto-configure all detected AI clients."""
+    print("[4/4] Configuring AI Client Integrations (Claude, Cursor, VS Code, etc.)...")
+    detected = detect_supported_clients()
+    configured: list[str] = []
+
+    if not detected:
+        print("  ℹ No desktop AI clients (Claude, Cursor, Windsurf, Cline) detected automatically.")
+        # Offer default Claude Desktop location
+        default_claude = get_claude_desktop_config_path()
+        choice = "y" if auto_yes else input(
+            f"  [?] Create Claude Desktop config anyway at:\n      {default_claude}? [Y/n]: "
+        ).strip().lower()
+        if choice not in ("n", "no"):
+            _write_mcp_json(default_claude, doc_url)
+            configured.append(f"Claude Desktop ({default_claude})")
+            print(f"  ✓ Configured Claude Desktop at: {default_claude}")
+        return configured
+
+    for name, path in detected:
+        if not auto_yes:
+            choice = input(f"  [?] Auto-configure {name} at:\n      {path}? [Y/n]: ").strip().lower()
+            if choice in ("n", "no"):
+                print(f"  Skipped {name}.")
+                continue
+        _write_mcp_json(path, doc_url)
+        configured.append(f"{name} ({path})")
+        print(f"  ✓ Configured {name} at: {path}")
+
+    return configured
 
 
 def run_setup(
@@ -191,9 +261,9 @@ def run_setup(
     auto_yes: bool = False,
     skip_browser_install: bool = False,
 ) -> None:
-    print("=" * 64)
-    print("        Onshape MCP — 1-Click Setup & Tester Wizard")
-    print("=" * 64)
+    print("=" * 68)
+    print("        Onshape MCP — 1-Click Multi-AI Setup & Tester Wizard")
+    print("=" * 68)
     print(f"Base data directory: {_BASE_DIR}\n")
 
     # 1. Playwright install
@@ -223,7 +293,6 @@ def run_setup(
 
     if final_doc_url:
         env_file = _BASE_DIR / ".env"
-        # Append or update in .env
         existing = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
         if "ONSHAPE_DEFAULT_DOC=" in existing:
             import re
@@ -237,24 +306,25 @@ def run_setup(
 
     print()
 
-    # 4. Claude Desktop config
-    configured_path = configure_claude_desktop(
+    # 4. Client config
+    configured = configure_detected_clients(
         doc_url=final_doc_url,
         auto_yes=auto_yes,
     )
     print()
 
     # Summary
-    print("=" * 64)
+    print("=" * 68)
     print("🎉 Setup Complete!")
-    print("=" * 64)
-    if configured_path:
-        print("1. Restart Claude Desktop completely.")
-        print("2. You will see 'onshape' in Claude's installed tools icon (hammer).")
-        print("3. Tell Claude:")
-        print("   'Draw a 10cm by 5cm box on the Top plane in Onshape'")
+    print("=" * 68)
+    if configured:
+        print("Configured Desktop Clients:")
+        for c in configured:
+            print(f"  • {c}")
+        print("\nRestart your AI client, then ask:")
+        print("  'Draw a 10cm by 5cm box on the Top plane in Onshape'")
     else:
-        print("To connect manually in Claude Desktop, add this to your config:")
+        print("Manual Desktop Config (Claude Desktop, Cursor, Windsurf):")
         print(
             json.dumps(
                 {
@@ -272,7 +342,17 @@ def run_setup(
                 indent=2,
             )
         )
-    print("=" * 64)
+
+    print("-" * 68)
+    print("🌐 Using Web Versions Only? (ChatGPT Web, LibreChat, Open WebUI):")
+    print("1. Start the server in SSE mode:")
+    print("   onshape-mcp --transport sse --port 8000")
+    print("2. Expose it via a secure tunnel (e.g. Cloudflare or Localtunnel):")
+    print("   cloudflared tunnel --url http://localhost:8000")
+    print("   # Or: npx localtunnel --port 8000")
+    print("3. Paste the resulting URL (e.g. https://xxxx.trycloudflare.com/sse)")
+    print("   into your web AI connector / LibreChat / Open WebUI!")
+    print("=" * 68)
 
 
 def main() -> None:
