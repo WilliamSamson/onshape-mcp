@@ -567,13 +567,32 @@ async def act(goal: str, max_steps: int = 25) -> str:
     and executes it. Tries deterministic fast execution first (10-20s), falling back
     to vision loop if ambiguous."""
     try:
+        d: OnshapeDriver | None = None
+        url_match = re.search(r"https://cad\.onshape\.com/[^\s)\]]+", goal)
+        if url_match:
+            d = await _driver_lazy()
+            await d.open(url_match.group(0))
+
+        lower_goal = goal.lower()
+        if any(word in lower_goal for word in ("list", "show", "existing")) and any(
+            word in lower_goal for word in ("feature", "features", "sketch", "sketches")
+        ):
+            d = d or await _driver_lazy()
+            listed = await ui_actions.features_list(d)
+            return json.dumps(
+                {
+                    "ok": listed.ok,
+                    "mode": "deterministic_inspection",
+                    "features": listed.meta.get("features", []),
+                    "summary": listed.note,
+                },
+                indent=2,
+            )
+
         # 1. Try fast path first
         plan = parse_intent(goal)
         if plan is not None:
-            d = await _driver_lazy()
-            url_match = re.search(r"https://cad\.onshape\.com/[^\s)\]]+", goal)
-            if url_match:
-                await d.open(url_match.group(0))
+            d = d or await _driver_lazy()
             result_fast = await fast_execute(d, plan)
             return json.dumps(
                 {

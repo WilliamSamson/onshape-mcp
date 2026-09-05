@@ -57,7 +57,10 @@ class GeminiWeb:
         try:
             from gemini_webapi import GeminiClient  # type: ignore
         except ImportError as e:  # pragma: no cover
-            raise RuntimeError("Install gemini-webapi: `pip install gemini-webapi`") from e
+            raise RuntimeError(
+                f"Gemini runtime import failed ({type(e).__name__}: {e}). "
+                "Verify gemini-webapi and its transitive dependencies."
+            ) from e
 
         # Prefer letting the library use browser-cookie3 directly. It
         # grabs the full Chrome session (PSID, PSIDTS, PSIDCC, third-party

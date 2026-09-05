@@ -226,6 +226,30 @@ def test_fast_executor_stops_on_false_result() -> None:
     assert result.error == "sketch.start: not active"
 
 
+def test_act_lists_features_without_gemini() -> None:
+    import asyncio
+    import json
+    from unittest.mock import AsyncMock, patch
+
+    from onshape_mcp.server import act
+    from onshape_mcp.ui_actions import Result
+
+    with (
+        patch("onshape_mcp.server._driver_lazy", AsyncMock(return_value=object())),
+        patch(
+            "onshape_mcp.server.ui_actions.features_list",
+            AsyncMock(return_value=Result(True, "Found 2 features", extra={"features": ["Sketch 1", "Sketch 2"]})),
+        ),
+        patch("onshape_mcp.server._loop_lazy", AsyncMock()) as vision_fallback,
+    ):
+        result = json.loads(asyncio.run(act("list existing features")))
+
+    assert result["ok"] is True
+    assert result["mode"] == "deterministic_inspection"
+    assert result["features"] == ["Sketch 1", "Sketch 2"]
+    vision_fallback.assert_not_awaited()
+
+
 def test_intent_parses_5x5_cube() -> None:
     """The intent parser should produce a 4-action plan for the canonical
     '5x5 cube' goal."""
