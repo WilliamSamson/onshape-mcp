@@ -191,6 +191,46 @@ async def onshape_view_iso() -> str:
 
 
 @mcp.tool()
+async def onshape_create_sketch(
+    plane: str = "Top",
+    name: str | None = None,
+    shapes: list[dict[str, Any]] = [],
+) -> str:
+    """Create a complete 2D sketch with one or more shapes/entities on a plane.
+
+    This is the primary sketching tool for AI agents. It opens a sketch on the
+    specified plane ('Top', 'Front', or 'Right'), draws all specified shapes in
+    Cartesian millimetre coordinates ((0,0) at origin, +X right, +Y up), and
+    commits the sketch to the Part Studio.
+
+    Supported shapes in `shapes`:
+    - {"type": "rectangle", "width_mm": 50, "height_mm": 30, "center_x": 0, "center_y": 0, "centered": true}
+    - {"type": "circle", "diameter_mm": 20, "center_x": 0, "center_y": 0} (or "radius_mm")
+    - {"type": "line", "p1": [0, 0], "p2": [50, 0]}
+    - {"type": "lines", "points": [[0, 0], [40, 0], [40, 10], [10, 10], [10, 50], [0, 50]], "closed": true}
+    - {"type": "polygon", "sides": 6, "radius_mm": 25, "center_x": 0, "center_y": 0}
+    - {"type": "arc", "p1": [0, 0], "p2": [20, 20], "radius_mm": 15}
+    - {"type": "point", "x": 0, "y": 0}
+    """
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.sketch_create(d, plane=plane, name=name, shapes=shapes)
+        return json.dumps(res.to_dict())
+    except Exception as e:
+        return _format_error("onshape_create_sketch", e)
+
+
+@mcp.tool()
+async def onshape_sketch(
+    plane: str = "Top",
+    name: str | None = None,
+    shapes: list[dict[str, Any]] = [],
+) -> str:
+    """Create a complete 2D sketch (alias for onshape_create_sketch)."""
+    return await onshape_create_sketch(plane=plane, name=name, shapes=shapes)
+
+
+@mcp.tool()
 async def onshape_sketch_start(
     plane_x: float | None = None,
     plane_y: float | None = None,
@@ -628,7 +668,35 @@ async def act(goal: str, max_steps: int = 25) -> str:
                 indent=2,
             )
 
-        # 2. Fallback to vision loop
+        # 2. Fallback to vision loop if configured; otherwise guide LLM to onshape_create_sketch
+        vision = await _vision_lazy()
+        if not vision._has_cookie_file():
+            return json.dumps(
+                {
+                    "ok": False,
+                    "mode": "unrecognized_intent",
+                    "goal": goal,
+                    "message": (
+                        f"Could not map goal '{goal}' to a deterministic sketch fast-path. "
+                        "Please call 'onshape_create_sketch' directly with the target plane ('Top', 'Front', or 'Right') "
+                        "and a list of shapes (e.g. rectangles, circles, lines, polygons), or call individual sketch tools "
+                        "('onshape_sketch_start', 'onshape_sketch_rectangle', 'onshape_sketch_circle', 'onshape_sketch_line', 'onshape_sketch_exit')."
+                    ),
+                    "suggested_tool": "onshape_create_sketch",
+                    "available_tools": [
+                        "onshape_create_sketch",
+                        "onshape_sketch_start",
+                        "onshape_sketch_rectangle",
+                        "onshape_sketch_circle",
+                        "onshape_sketch_line",
+                        "onshape_sketch_polygon",
+                        "onshape_sketch_arc",
+                        "onshape_sketch_exit",
+                    ],
+                },
+                indent=2,
+            )
+
         loop = await _loop_lazy()
         result_loop = await loop.run(goal, max_steps=max_steps)
         tail = [

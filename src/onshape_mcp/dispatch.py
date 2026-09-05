@@ -280,6 +280,9 @@ TOOL_DISPATCH: dict[str, Any] = {
         d, "fix", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 1)))]
     ),
     "sketch.exit": lambda d, a: ui_actions.sketch_exit(d),
+    "sketch.create": lambda d, a: ui_actions.sketch_create(
+        d, a.get("plane", "Top"), a.get("name"), a.get("shapes", [])
+    ),
     "feature.extrude": lambda d, a: ui_actions.feature_extrude(
         d, a.get("depth_mm") if "depth_mm" in a else a.get("depth")
     ),

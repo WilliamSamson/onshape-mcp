@@ -193,3 +193,28 @@ def test_parse_delete():
     plan_clear = parse("clear all features")
     assert plan_clear is not None
     assert [a.tool for a in plan_clear.actions] == ["features.delete_all"]
+
+
+def test_parse_polyline_triangle():
+    plan = parse("sketch a triangle with vertices at (0,0), (50,0), and (25,40) on the Front plane")
+    assert plan is not None
+    assert plan.actions[0].tool == "sketch.start"
+    assert plan.actions[0].args["plane"] == "Front"
+    assert len(plan.actions) == 5  # start + 3 lines (closed) + exit
+    assert plan.actions[1].tool == "sketch.line"
+    assert plan.actions[1].args["p1"] == [0.0, 0.0]
+    assert plan.actions[1].args["p2"] == [50.0, 0.0]
+    assert plan.actions[2].tool == "sketch.line"
+    assert plan.actions[2].args["p1"] == [50.0, 0.0]
+    assert plan.actions[2].args["p2"] == [25.0, 40.0]
+    assert plan.actions[3].tool == "sketch.line"
+    assert plan.actions[3].args["p1"] == [25.0, 40.0]
+    assert plan.actions[3].args["p2"] == [0.0, 0.0]
+    assert plan.actions[4].tool == "sketch.exit"
+
+
+def test_parse_polyline_bracket():
+    plan = parse("draw an L-bracket shape from (0,0) to (40,0) to (40,10) to (10,10) to (10,60) to (0,60)")
+    assert plan is not None
+    assert len(plan.actions) == 8  # start + 6 lines (closed back to 0,0) + exit
+    assert plan.actions[-1].tool == "sketch.exit"

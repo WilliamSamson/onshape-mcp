@@ -163,8 +163,22 @@ def parse(text: str) -> Plan | None:
     # Deterministic undo / redo
     if lower in ("undo", "revert", "undo last"):
         return Plan([Action("doc.undo")], "Undo last action")
-    if lower in ("redo"):
+    if lower in ("redo",):
         return Plan([Action("doc.redo")], "Redo last action")
+
+    # Detect coordinate polyline / vertices (e.g. triangle, polygon path, custom profile)
+    pairs = re.findall(r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)", t)
+    if len(pairs) >= 2:
+        plane = _extract_plane(t)
+        pts = [[float(x), float(y)] for x, y in pairs]
+        actions = [Action("sketch.start", {"plane": plane})]
+        for i in range(len(pts) - 1):
+            actions.append(Action("sketch.line", {"p1": pts[i], "p2": pts[i + 1]}))
+        if len(pts) >= 3 and (any(w in lower for w in ("triangle", "closed", "polygon", "profile", "bracket", "shape", "vertices")) or pts[0] != pts[-1]):
+            if pts[0] != pts[-1]:
+                actions.append(Action("sketch.line", {"p1": pts[-1], "p2": pts[0]}))
+        actions.append(Action("sketch.exit", {}))
+        return Plan(actions, f"Sketch polyline with {len(pts)} vertices on {plane} plane")
 
     # Detect shape type
     is_rect = any(w in lower for w in ("box", "rectangle", "rect", "square"))

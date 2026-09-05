@@ -323,18 +323,20 @@ async def get_canvas_origin(d: OnshapeDriver) -> tuple[float, float]:
         return (843.0, 473.0)
 
 
+MM_TO_PX: float = 3.2583
+
+
 async def _ensure_viewport_coords(d: OnshapeDriver, pt: tuple[float, float]) -> tuple[float, float]:
     x, y = pt
     cx, cy = await get_canvas_origin(d)
     # If pt is (0, 0), return exact origin
     if x == 0 and y == 0:
         return (cx, cy)
-    # If small coordinates (CAD units relative to origin), convert to screen pixels:
-    # In CAD space, +X is right, +Y is up (so screen Y is cy - y*scale)
-    if abs(x) <= 200 and abs(y) <= 200:
-        scale = 10.0 if (abs(x) <= 25 and abs(y) <= 25) else 1.0
-        return (cx + x * scale, cy - y * scale)
-    return (x, y)
+    # If coordinates are already in viewport pixel space (> 250px from origin)
+    if abs(x) > 250 or abs(y) > 250:
+        return (x, y)
+    # CAD Cartesian coordinates in mm: +X is right, +Y is up
+    return (cx + x * MM_TO_PX, cy - y * MM_TO_PX)
 
 
 async def sketch_rectangle(
@@ -986,6 +988,118 @@ async def sketch_exit(d: OnshapeDriver, commit: bool = True, **_kw) -> Result:
         True, "exit sketch", after, {"before": str(before), "after": str(after), "commit": commit}
     )
     _record("sketch.exit", {"commit": commit}, r)
+    return r
+
+
+async def sketch_create(
+    d: OnshapeDriver,
+    plane: str = "Top",
+    name: str | None = None,
+    shapes: list[dict[str, Any]] | None = None,
+) -> Result:
+    """Create a complete 2D sketch with one or more shapes on the requested plane.
+
+    Supported shapes in `shapes`:
+      - {"type": "rectangle", "width_mm": 50, "height_mm": 30, "center_x": 0, "center_y": 0, "centered": true}
+      - {"type": "circle", "diameter_mm": 20, "center_x": 0, "center_y": 0} (or "radius_mm")
+      - {"type": "line", "p1": [0, 0], "p2": [50, 0]}
+      - {"type": "lines", "points": [[0, 0], [40, 0], [40, 10], [10, 10], [10, 50], [0, 50]], "closed": true}
+      - {"type": "polygon", "sides": 6, "radius_mm": 25, "center_x": 0, "center_y": 0}
+      - {"type": "arc", "p1": [0, 0], "p2": [20, 20], "radius_mm": 15}
+      - {"type": "point", "x": 0, "y": 0}
+    """
+    start_res = await sketch_start(d, plane=plane)
+    if not start_res.ok:
+        return start_res
+
+    created_shapes: list[dict[str, Any]] = []
+    shapes = shapes or []
+    for s in shapes:
+        stype = str(s.get("type", "")).lower().strip()
+        if stype in ("rectangle", "box", "square"):
+            w = s.get("width_mm") or s.get("width") or 50.0
+            h = s.get("height_mm") or s.get("height") or w
+            cx_val = float(s.get("center_x", 0.0))
+            cy_val = float(s.get("center_y", 0.0))
+            w_mm = float(w) if isinstance(w, (int, float)) else _parse_dim_px(w) / MM_TO_PX
+            h_mm = float(h) if isinstance(h, (int, float)) else _parse_dim_px(h) / MM_TO_PX
+            if s.get("centered", True):
+                c1 = (cx_val - w_mm / 2.0, cy_val - h_mm / 2.0)
+                c2 = (cx_val + w_mm / 2.0, cy_val + h_mm / 2.0)
+            else:
+                c1 = (cx_val, cy_val)
+                c2 = (cx_val + w_mm, cy_val + h_mm)
+            res = await sketch_rectangle(d, corner1=c1, corner2=c2, width=f"{w_mm:g} mm", height=f"{h_mm:g} mm")
+            created_shapes.append({"type": "rectangle", "ok": res.ok, "width_mm": w_mm, "height_mm": h_mm})
+
+        elif stype in ("circle", "hole"):
+            dia = s.get("diameter_mm") or s.get("diameter")
+            rad = s.get("radius_mm") or s.get("radius")
+            if dia is not None:
+                rad_mm = float(dia) / 2.0 if isinstance(dia, (int, float)) else _parse_dim_px(dia) / (2.0 * MM_TO_PX)
+            elif rad is not None:
+                rad_mm = float(rad) if isinstance(rad, (int, float)) else _parse_dim_px(rad) / MM_TO_PX
+            else:
+                rad_mm = 20.0
+            cx_val = float(s.get("center_x", 0.0))
+            cy_val = float(s.get("center_y", 0.0))
+            r_px = rad_mm * MM_TO_PX
+            res = await sketch_circle(d, center=(cx_val, cy_val), radius_px=r_px)
+            created_shapes.append({"type": "circle", "ok": res.ok, "radius_mm": rad_mm, "center": [cx_val, cy_val]})
+
+        elif stype in ("line", "segment"):
+            p1 = s.get("p1") or s.get("start") or (0.0, 0.0)
+            p2 = s.get("p2") or s.get("end") or (10.0, 0.0)
+            res = await sketch_line(d, (float(p1[0]), float(p1[1])), (float(p2[0]), float(p2[1])))
+            created_shapes.append({"type": "line", "ok": res.ok, "p1": list(p1), "p2": list(p2)})
+
+        elif stype in ("lines", "polyline", "path", "profile"):
+            pts = s.get("points") or []
+            closed = s.get("closed", False)
+            line_results = []
+            for j in range(len(pts) - 1):
+                res = await sketch_line(d, (float(pts[j][0]), float(pts[j][1])), (float(pts[j+1][0]), float(pts[j+1][1])))
+                line_results.append(res.ok)
+            if closed and len(pts) > 2:
+                res = await sketch_line(d, (float(pts[-1][0]), float(pts[-1][1])), (float(pts[0][0]), float(pts[0][1])))
+                line_results.append(res.ok)
+            created_shapes.append({"type": "polyline", "ok": all(line_results), "segments": len(line_results)})
+
+        elif stype in ("polygon", "hex", "hexagon", "triangle"):
+            sides = int(s.get("sides", 6))
+            rad = s.get("radius_mm") or s.get("radius", 25.0)
+            rad_mm = float(rad) if isinstance(rad, (int, float)) else _parse_dim_px(rad) / MM_TO_PX
+            cx_val = float(s.get("center_x", 0.0))
+            cy_val = float(s.get("center_y", 0.0))
+            res = await sketch_polygon(d, center=(cx_val, cy_val), radius=rad_mm * MM_TO_PX, sides=sides)
+            created_shapes.append({"type": "polygon", "ok": res.ok, "sides": sides, "radius_mm": rad_mm})
+
+        elif stype in ("arc",):
+            p1 = s.get("p1", (0.0, 0.0))
+            p2 = s.get("p2", (20.0, 20.0))
+            rad_pt = s.get("radius_pt") or ((float(p1[0]) + float(p2[0])) / 2.0, (float(p1[1]) + float(p2[1])) / 2.0 + 10.0)
+            res = await sketch_arc(d, (float(p1[0]), float(p1[1])), (float(p2[0]), float(p2[1])), (float(rad_pt[0]), float(rad_pt[1])))
+            created_shapes.append({"type": "arc", "ok": res.ok})
+
+        elif stype in ("point",):
+            x = float(s.get("x", 0.0))
+            y = float(s.get("y", 0.0))
+            res = await sketch_point(d, (x, y))
+            created_shapes.append({"type": "point", "ok": res.ok})
+
+    exit_res = await sketch_exit(d, commit=True)
+    shot = await d.screenshot("sketch_create.png")
+
+    listing = await features_list(d)
+    all_features = listing.meta.get("features", [])
+
+    r = Result(
+        True,
+        f"Created sketch on {plane} with {len(created_shapes)} shape(s)",
+        shot,
+        {"shapes": created_shapes, "features": all_features, "plane": plane, "name": name},
+    )
+    _record("sketch.create", {"plane": plane, "shapes_count": len(created_shapes)}, r)
     return r
 
 
