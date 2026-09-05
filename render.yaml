@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: onshape-mcp
+    env: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: MCP_TRANSPORT
+        value: sse
+      - key: ONSHAPE_COOKIES_JSON
+        sync: false
+      - key: ONSHAPE_DEFAULT_DOC
+        sync: false

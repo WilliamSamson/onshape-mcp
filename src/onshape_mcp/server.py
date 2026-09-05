@@ -648,7 +648,7 @@ def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] in ("share", "tunnel"):
         from .tunnel import run_tunnel_and_server
 
-        port = int(os.environ.get("MCP_PORT", "8000"))
+        port = int(os.environ.get("PORT", os.environ.get("MCP_PORT", "8000")))
         run_tunnel_and_server(port=port)
         return
 
@@ -672,8 +672,8 @@ def main() -> None:
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("MCP_PORT", "8000")),
-        help="Port for SSE transport (default: 8000)",
+        default=int(os.environ.get("PORT", os.environ.get("MCP_PORT", "8000"))),
+        help="Port for SSE transport (default: 8000 or $PORT)",
     )
     args, _ = parser.parse_known_args()
 
