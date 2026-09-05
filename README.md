@@ -34,20 +34,37 @@ Gemini sees each screenshot, picks the next tool, calls it, repeats until
 the goal is met or it bails. Bounded by `max_steps` (default 25) and a
 stuck detector (3 identical screenshots in a row = stop).
 
-## How I run it
+## Quick Start for Testers (1-Command Smart Setup)
+
+To test Onshape MCP in **Claude Desktop** with zero manual configuration:
 
 ```bash
-# one-shot bootstrap (use python3 explicitly, "python" is not always aliased)
-python3 scripts/bootstrap.py
-
-# then start the server
-source .venv/bin/activate
-python3 -m onshape_mcp.server
+uvx --from git+https://github.com/WilliamSamson/onshape-mcp onshape-mcp setup
 ```
 
-`bootstrap.py` does the venv, the pip install, the Chromium download, the
-cookie extraction, the Onshape login, and the M0 sanity checks. Re-run it
-any time; it's idempotent.
+The smart wizard will automatically:
+1. Ensure Playwright's Chromium browser engine is downloaded.
+2. Auto-detect and sync your active Onshape login session from your local browser (Chrome, Edge, Brave, etc.) into `~/.onshape-mcp/cookies/` — no manual cookie copying needed.
+3. Auto-configure Claude Desktop (`claude_desktop_config.json`) across macOS, Windows, and Linux.
+4. Keep all credentials and cookies isolated on your machine with **zero hardcoded paths**.
+
+Restart Claude Desktop, and you can immediately ask:
+> *"Draw a 10cm by 5cm box on the Top plane in Onshape"*
+
+---
+
+## Local Development & Manual Run
+
+```bash
+# Clone and install
+git clone https://github.com/WilliamSamson/onshape-mcp.git
+cd onshape-mcp
+uv sync
+
+# Run the smart setup or start server
+uv run onshape-mcp setup
+uv run onshape-mcp
+```
 
 ## A note on Google + automated browsers
 

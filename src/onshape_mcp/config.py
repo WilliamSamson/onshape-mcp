@@ -8,27 +8,43 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
-def _find_repo_root() -> Path:
-    """Walk up from cwd looking for pyproject.toml. Works whether the
-    package is being run from source or from an installed location inside
-    a venv (the package's __file__ would otherwise point at site-packages).
+def _find_base_dir() -> Path:
+    """Determine the base directory for onshape-mcp configuration, cookies, and state.
+
+    Priority:
+    1. ONSHAPE_DIR or ONSHAPE_HOME environment variable if explicitly set.
+    2. Local source repository if pyproject.toml and src/onshape_mcp exist in cwd or parents.
+    3. User home directory fallback: ~/.onshape-mcp (safe for uvx, pip, Claude Desktop).
     """
+    if "ONSHAPE_DIR" in os.environ:
+        return Path(os.environ["ONSHAPE_DIR"]).expanduser().resolve()
+    if "ONSHAPE_HOME" in os.environ:
+        return Path(os.environ["ONSHAPE_HOME"]).expanduser().resolve()
+
     cwd = Path.cwd()
     for p in [cwd, *cwd.parents]:
-        if (p / "pyproject.toml").is_file():
+        if (p / "pyproject.toml").is_file() and (p / "src" / "onshape_mcp").is_dir():
             return p
-    return cwd
+
+    user_base = Path.home() / ".onshape-mcp"
+    user_base.mkdir(parents=True, exist_ok=True)
+    return user_base
 
 
-_REPO_ROOT = _find_repo_root()
-load_dotenv(_REPO_ROOT / ".env")
+_BASE_DIR = _find_base_dir()
+
+# Load env from base directory (.env in repo or ~/.onshape-mcp/.env)
+if (_BASE_DIR / ".env").is_file():
+    load_dotenv(_BASE_DIR / ".env")
+elif (Path.home() / ".onshape-mcp" / ".env").is_file():
+    load_dotenv(Path.home() / ".onshape-mcp" / ".env")
 
 
 def _path(key: str, default: str) -> Path:
     raw = os.getenv(key, default)
     p = Path(raw).expanduser()
     if not p.is_absolute():
-        p = (_REPO_ROOT / p).resolve()
+        p = (_BASE_DIR / p).resolve()
     return p
 
 

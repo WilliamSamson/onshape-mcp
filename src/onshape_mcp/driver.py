@@ -118,40 +118,67 @@ class OnshapeDriver:
         Chrome's encrypted DB can't be read headless.
         """
         raw = []
-        if self.cookie_file.exists():
+        # 1. Environment variable support (useful for remote/cloud hosting)
+        env_cookies = os.getenv("ONSHAPE_COOKIES_JSON")
+        if env_cookies:
+            try:
+                raw = json.loads(env_cookies)
+            except Exception as e:
+                print(f"[driver] failed parsing ONSHAPE_COOKIES_JSON: {e}")
+
+        # 2. Local cookie file
+        if not raw and self.cookie_file.exists():
             try:
                 raw = json.loads(self.cookie_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError) as e:
                 print(f"[driver] cookie file unreadable ({e}); ignoring")
+
+        # 3. Auto-extract from available installed browsers
         if not raw:
-            # Auto-extract from Chrome if file is missing or empty
             try:
                 import browser_cookie3
 
-                cj = browser_cookie3.chrome(domain_name="onshape.com")
-                for c in cj:
-                    cookie = {
-                        "name": c.name,
-                        "value": c.value,
-                        "domain": c.domain,
-                        "path": c.path,
-                        "secure": bool(c.secure),
-                        "httpOnly": bool(
-                            c.has_nonstandard_attr("HttpOnly")
-                            or c.has_nonstandard_attr("httponly")
-                        ),
-                    }
-                    if c.expires:
-                        cookie["expires"] = float(c.expires)
-                    raw.append(cookie)
-                if raw:
-                    self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
-                    self.cookie_file.write_text(json.dumps(raw, indent=2), encoding="utf-8")
-                    print(
-                        f"[driver] auto-synced {len(raw)} Onshape cookies from Chrome to {self.cookie_file.name}"
-                    )
+                browser_loaders = [
+                    ("Chrome", getattr(browser_cookie3, "chrome", None)),
+                    ("Brave", getattr(browser_cookie3, "brave", None)),
+                    ("Edge", getattr(browser_cookie3, "edge", None)),
+                    ("Chromium", getattr(browser_cookie3, "chromium", None)),
+                    ("Firefox", getattr(browser_cookie3, "firefox", None)),
+                    ("Arc", getattr(browser_cookie3, "arc", None)),
+                    ("Opera", getattr(browser_cookie3, "opera", None)),
+                    ("Vivaldi", getattr(browser_cookie3, "vivaldi", None)),
+                ]
+                for browser_name, loader in browser_loaders:
+                    if loader is None:
+                        continue
+                    try:
+                        cj = loader(domain_name="onshape.com")
+                        for c in cj:
+                            cookie = {
+                                "name": c.name,
+                                "value": c.value,
+                                "domain": c.domain,
+                                "path": c.path,
+                                "secure": bool(c.secure),
+                                "httpOnly": bool(
+                                    c.has_nonstandard_attr("HttpOnly")
+                                    or c.has_nonstandard_attr("httponly")
+                                ),
+                            }
+                            if c.expires:
+                                cookie["expires"] = float(c.expires)
+                            raw.append(cookie)
+                        if raw:
+                            self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
+                            self.cookie_file.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+                            print(
+                                f"[driver] auto-synced {len(raw)} Onshape cookies from {browser_name} to {self.cookie_file.name}"
+                            )
+                            break
+                    except Exception:
+                        continue
             except Exception as e:
-                print(f"[driver] could not extract Onshape cookies from Chrome: {e}")
+                print(f"[driver] could not extract Onshape cookies from local browsers: {e}")
         if not raw:
             return
         # Playwright's add_cookies wants the same shape it returns.

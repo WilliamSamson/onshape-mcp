@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 onshape-mcp = "onshape_mcp.server:main"
+onshape-mcp-setup = "onshape_mcp.setup:main"
 
 [project.optional-dependencies]
 dev = [

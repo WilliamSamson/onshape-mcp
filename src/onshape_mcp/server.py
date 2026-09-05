@@ -629,6 +629,21 @@ async def _cleanup() -> None:
 def main() -> None:
     import argparse
     import os
+    import sys
+
+    # Quick dispatch for setup wizard or login
+    if len(sys.argv) >= 2 and sys.argv[1] == "setup":
+        from .setup import main as run_setup
+
+        sys.argv.pop(1)
+        run_setup()
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "login":
+        from .driver import login_interactive
+
+        asyncio.run(login_interactive())
+        return
 
     parser = argparse.ArgumentParser(description="Onshape MCP Server")
     parser.add_argument(
