@@ -38,3 +38,15 @@ def test_configure_claude_desktop_in_temp(tmp_path: Path) -> None:
         entry = data["mcpServers"]["onshape"]
         assert entry["command"] == "uvx"
         assert entry["env"]["ONSHAPE_DEFAULT_DOC"] == "https://cad.onshape.com/test"
+
+
+def test_find_tunnel_binary() -> None:
+    from onshape_mcp.tunnel import find_tunnel_binary
+
+    res = find_tunnel_binary()
+    # On this machine, cloudflared is installed
+    if res is not None:
+        name, cmd = res
+        assert name in ("cloudflared", "localtunnel")
+        assert len(cmd) >= 1
+

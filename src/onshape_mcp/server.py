@@ -645,12 +645,24 @@ def main() -> None:
         asyncio.run(login_interactive())
         return
 
+    if len(sys.argv) >= 2 and sys.argv[1] in ("share", "tunnel"):
+        from .tunnel import run_tunnel_and_server
+
+        port = int(os.environ.get("MCP_PORT", "8000"))
+        run_tunnel_and_server(port=port)
+        return
+
     parser = argparse.ArgumentParser(description="Onshape MCP Server")
     parser.add_argument(
         "--transport",
         choices=["stdio", "sse"],
         default=os.environ.get("MCP_TRANSPORT", "stdio"),
         help="Transport protocol: 'stdio' for Claude Desktop / LLM clients (default), or 'sse' for remote hosting.",
+    )
+    parser.add_argument(
+        "--tunnel",
+        action="store_true",
+        help="Auto-start Cloudflare tunnel to expose live HTTPS link for ChatGPT Web / LibreChat.",
     )
     parser.add_argument(
         "--host",
@@ -664,6 +676,12 @@ def main() -> None:
         help="Port for SSE transport (default: 8000)",
     )
     args, _ = parser.parse_known_args()
+
+    if args.tunnel:
+        from .tunnel import run_tunnel_and_server
+
+        run_tunnel_and_server(port=args.port, host=args.host)
+        return
 
     if args.transport == "sse":
         mcp.settings.host = args.host
