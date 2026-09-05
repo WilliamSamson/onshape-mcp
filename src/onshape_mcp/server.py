@@ -627,8 +627,35 @@ async def _cleanup() -> None:
 
 
 def main() -> None:
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Onshape MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default=os.environ.get("MCP_TRANSPORT", "stdio"),
+        help="Transport protocol: 'stdio' for Claude Desktop / LLM clients (default), or 'sse' for remote hosting.",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("MCP_HOST", "0.0.0.0"),
+        help="Host interface for SSE transport (default: 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("MCP_PORT", "8000")),
+        help="Port for SSE transport (default: 8000)",
+    )
+    args, _ = parser.parse_known_args()
+
+    if args.transport == "sse":
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+
     try:
-        mcp.run()
+        mcp.run(transport=args.transport)
     finally:
         asyncio.run(_cleanup())
 

@@ -20,6 +20,9 @@ dependencies = [
     "gemini-webapi>=2.0.0",  # verify GeminiClient API on first install
 ]
 
+[project.scripts]
+onshape-mcp = "onshape_mcp.server:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.0",
