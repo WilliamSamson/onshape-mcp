@@ -84,6 +84,10 @@ def _dim_val(args: dict[str, Any], key: str) -> Any:
 
 # Tool name -> async fn(d, args) that calls the right ui_action.
 TOOL_DISPATCH: dict[str, Any] = {
+    "feature.delete": lambda d, a: ui_actions.feature_delete(d, a["name"]),
+    "feature.list": lambda d, a: ui_actions.features_list(d),
+    "document.undo": lambda d, a: ui_actions.doc_undo(d),
+    "document.redo": lambda d, a: ui_actions.doc_redo(d),
     "view.fit": lambda d, a: ui_actions.view_fit(d),
     "view.top": lambda d, a: ui_actions.view_top(d),
     "view.front": lambda d, a: ui_actions.view_front(d),

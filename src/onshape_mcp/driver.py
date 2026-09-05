@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,32 @@ class OnshapeDriver:
                 if self.channel == "chrome":
                     raise
                 print(f"[driver] real Chrome unavailable ({e}); using bundled Chromium")
+                try:
+                    self._ctx = await self._pw.chromium.launch_persistent_context(
+                        user_data_dir=str(self.profile_dir),
+                        headless=headless,
+                        viewport={"width": 1440, "height": 900},
+                        args=common_args,
+                    )
+                    self._channel_used = "chromium"
+                except Exception as inner_e:
+                    err_msg = str(inner_e).lower()
+                    if "playwright install" in err_msg or "executable doesn't exist" in err_msg:
+                        print("[driver] Chromium executable missing. Installing via playwright...")
+                        import subprocess
+                        import sys
+                        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                        self._ctx = await self._pw.chromium.launch_persistent_context(
+                            user_data_dir=str(self.profile_dir),
+                            headless=headless,
+                            viewport={"width": 1440, "height": 900},
+                            args=common_args,
+                        )
+                        self._channel_used = "chromium"
+                    else:
+                        raise
+        else:
+            try:
                 self._ctx = await self._pw.chromium.launch_persistent_context(
                     user_data_dir=str(self.profile_dir),
                     headless=headless,
@@ -87,14 +114,22 @@ class OnshapeDriver:
                     args=common_args,
                 )
                 self._channel_used = "chromium"
-        else:
-            self._ctx = await self._pw.chromium.launch_persistent_context(
-                user_data_dir=str(self.profile_dir),
-                headless=headless,
-                viewport={"width": 1440, "height": 900},
-                args=common_args,
-            )
-            self._channel_used = "chromium"
+            except Exception as inner_e:
+                err_msg = str(inner_e).lower()
+                if "playwright install" in err_msg or "executable doesn't exist" in err_msg:
+                    print("[driver] Chromium executable missing. Installing via playwright...")
+                    import subprocess
+                    import sys
+                    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+                    self._ctx = await self._pw.chromium.launch_persistent_context(
+                        user_data_dir=str(self.profile_dir),
+                        headless=headless,
+                        viewport={"width": 1440, "height": 900},
+                        args=common_args,
+                    )
+                    self._channel_used = "chromium"
+                else:
+                    raise
         await self._load_cookies()
         self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
         return self._page
@@ -119,12 +154,19 @@ class OnshapeDriver:
         """
         raw = []
         # 1. Environment variable support (useful for remote/cloud hosting)
-        env_cookies = os.getenv("ONSHAPE_COOKIES_JSON")
+        env_cookies = os.getenv("ONSHAPE_COOKIES_B64") or os.getenv("ONSHAPE_COOKIES_JSON")
         if env_cookies:
             try:
-                raw = json.loads(env_cookies)
-            except Exception as e:
-                print(f"[driver] failed parsing ONSHAPE_COOKIES_JSON: {e}")
+                import base64
+                decoded = base64.b64decode(env_cookies.strip()).decode("utf-8")
+                raw = json.loads(decoded)
+                print(f"[driver] successfully loaded {len(raw)} cookies from base64 env")
+            except Exception:
+                try:
+                    raw = json.loads(env_cookies)
+                    print(f"[driver] successfully loaded {len(raw)} cookies from json env")
+                except Exception as e:
+                    print(f"[driver] failed parsing cookies from env: {e}")
 
         # 2. Local cookie file
         if not raw and self.cookie_file.exists():

@@ -13,6 +13,7 @@ import traceback
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from . import tools as datasheet
 from . import ui_actions
@@ -24,7 +25,10 @@ from .journal import JournalEntry, journal
 from .loop import AgentLoop
 from .vision import GeminiWeb
 
-mcp = FastMCP("onshape-mcp")
+mcp = FastMCP(
+    "onshape-mcp",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 
 _driver: OnshapeDriver | None = None
 _vision: GeminiWeb | None = None
@@ -121,6 +125,12 @@ async def open_doc(url: str) -> str:
         return json.dumps({"ok": True, "message": f"Opened document {full}"})
     except Exception as e:
         return _format_error("open_doc", e)
+
+
+@mcp.tool()
+async def open_document(url: str) -> str:
+    """Navigate to an Onshape document URL or path (alias for open_doc)."""
+    return await open_doc(url=url)
 
 
 @mcp.tool()
@@ -608,6 +618,70 @@ async def act(goal: str, max_steps: int = 25) -> str:
         )
     except Exception as e:
         return _format_error("act", e)
+
+
+# Feature Tree & History Management
+
+
+@mcp.tool()
+async def onshape_feature_delete(name: str) -> str:
+    """Delete a feature or sketch by name (e.g. 'Sketch 1', 'Sketch 2', 'Extrude 1') from the Part Studio tree."""
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.feature_delete(d, name)
+        return json.dumps({"ok": res.ok, "message": res.note, "screenshot": str(res.screenshot) if res.screenshot else None})
+    except Exception as e:
+        return _format_error("onshape_feature_delete", e)
+
+
+@mcp.tool()
+async def onshape_delete(name: str) -> str:
+    """Delete a feature or sketch by name (alias for onshape_feature_delete)."""
+    return await onshape_feature_delete(name)
+
+
+@mcp.tool()
+async def onshape_feature_edit(name: str) -> str:
+    """Open an existing feature or sketch (e.g. 'Sketch 1') for editing."""
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.feature_edit(d, name)
+        return json.dumps({"ok": res.ok, "message": res.note, "screenshot": str(res.screenshot) if res.screenshot else None})
+    except Exception as e:
+        return _format_error("onshape_feature_edit", e)
+
+
+@mcp.tool()
+async def onshape_features_list() -> str:
+    """List all features currently in the Part Studio tree."""
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.features_list(d)
+        return json.dumps({"ok": res.ok, "features": res.meta.get("features", []), "message": res.note})
+    except Exception as e:
+        return _format_error("onshape_features_list", e)
+
+
+@mcp.tool()
+async def onshape_undo() -> str:
+    """Undo the last action in Onshape."""
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.doc_undo(d)
+        return json.dumps({"ok": res.ok, "message": res.note})
+    except Exception as e:
+        return _format_error("onshape_undo", e)
+
+
+@mcp.tool()
+async def onshape_redo() -> str:
+    """Redo the last undone action in Onshape."""
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.doc_redo(d)
+        return json.dumps({"ok": res.ok, "message": res.note})
+    except Exception as e:
+        return _format_error("onshape_redo", e)
 
 
 # Lifecycle

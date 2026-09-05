@@ -192,6 +192,15 @@ def test_gemini_web_cleanup_empty() -> None:
     assert deleted == 0
 
 
+def test_gemini_dependency_and_feature_management_dispatch() -> None:
+    """The deployed vision dependency and deterministic delete path stay wired."""
+    import gemini_webapi
+
+    assert gemini_webapi is not None
+    for tool in ("feature.delete", "feature.list", "document.undo", "document.redo"):
+        assert tool in TOOL_DISPATCH
+
+
 def test_manage_chats_importable() -> None:
     import importlib.util
 

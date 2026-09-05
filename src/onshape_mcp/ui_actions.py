@@ -1214,3 +1214,115 @@ async def doc_new(d: OnshapeDriver) -> Result:
     r = Result(True, "new document", shot)
     _record("doc.new", {}, r)
     return r
+
+
+async def feature_delete(d: OnshapeDriver, name: str) -> Result:
+    """Delete a feature (e.g. 'Sketch 1', 'Extrude 1') from the Part Studio tree."""
+    try:
+        # Select the name node, not the whole row: filtering the row by text can
+        # also match children (for example Sketch 1 when deleting Sketch 10).
+        label = d.page.locator(
+            "span.os-list-item-name, .os-list-item-label"
+        ).filter(has_text=name).first
+        if await label.count() == 0:
+            return Result(False, f"Feature '{name}' not found in feature tree")
+
+        await label.click(button="right")
+        await asyncio.sleep(0.4)
+        delete_menu = d.page.locator(".os-context-menu-item, .dropdown-menu li, .context-menu-item").filter(has_text="Delete").last
+        if await delete_menu.count() > 0:
+            await delete_menu.click()
+        else:
+            await d.press_key("Escape")
+            await asyncio.sleep(0.2)
+            await label.click()
+            await asyncio.sleep(0.2)
+            await d.press_key("Delete")
+
+        # Some Onshape documents ask for confirmation when dependent features
+        # are present. Accept that dialog without invoking the vision agent.
+        confirm = d.page.get_by_role("button", name="Delete", exact=True).last
+        if await confirm.count() > 0 and await confirm.is_visible():
+            await confirm.click()
+
+        await asyncio.sleep(0.8)
+        shot = await d.screenshot(f"delete_{name.replace(' ', '_').lower()}.png")
+        remaining = d.page.locator(
+            "span.os-list-item-name, .os-list-item-label"
+        ).filter(has_text=name)
+        if await remaining.count() > 0:
+            return Result(False, f"Delete command ran but feature '{name}' is still present", shot)
+        r = Result(True, f"Deleted feature '{name}'", shot)
+        _record("feature.delete", {"name": name}, r)
+        return r
+    except Exception as e:
+        return Result(False, f"Failed deleting feature '{name}': {e}")
+
+
+async def feature_edit(d: OnshapeDriver, name: str) -> Result:
+    """Open an existing feature or sketch (e.g. 'Sketch 1') for editing."""
+    try:
+        items = d.page.locator(".os-list-item.ns-user-feature, .os-list-item-label").filter(has_text=name)
+        if await items.count() == 0:
+            return Result(False, f"Feature '{name}' not found in feature tree")
+
+        target = items.first
+        await target.click(button="right")
+        await asyncio.sleep(0.4)
+
+        edit_btn = d.page.locator(".os-context-menu-item, .dropdown-menu li, .context-menu-item").filter(has_text="Edit…").first
+        if await edit_btn.count() > 0:
+            await edit_btn.click()
+        else:
+            await d.press_key("Escape")
+            await asyncio.sleep(0.2)
+            await target.dblclick()
+
+        await asyncio.sleep(0.8)
+        shot = await d.screenshot(f"edit_{name.replace(' ', '_').lower()}.png")
+        r = Result(True, f"Opened feature '{name}' for editing", shot)
+        _record("feature.edit", {"name": name}, r)
+        return r
+    except Exception as e:
+        return Result(False, f"Failed editing feature '{name}': {e}")
+
+
+async def features_list(d: OnshapeDriver) -> Result:
+    """Return list of all features currently in the Part Studio tree."""
+    try:
+        js = """() => Array.from(document.querySelectorAll('.os-list-item.ns-user-feature span.os-list-item-name, .os-list-item.ns-user-feature .os-list-item-label'))
+            .map(n => n.innerText.trim())
+            .filter(t => t.length > 0)"""
+        names = await d.page.evaluate(js)
+        shot = await d.screenshot("features_list.png")
+        r = Result(True, f"Found {len(names)} features: {names}", shot, {"features": names})
+        _record("features.list", {}, r)
+        return r
+    except Exception as e:
+        return Result(False, f"Failed listing features: {e}")
+
+
+async def doc_undo(d: OnshapeDriver) -> Result:
+    """Undo the last action in Onshape."""
+    try:
+        await d.page.keyboard.press("Control+z")
+        await asyncio.sleep(0.5)
+        shot = await d.screenshot("doc_undo.png")
+        r = Result(True, "Undo executed", shot)
+        _record("doc.undo", {}, r)
+        return r
+    except Exception as e:
+        return Result(False, f"Undo failed: {e}")
+
+
+async def doc_redo(d: OnshapeDriver) -> Result:
+    """Redo the last undone action in Onshape."""
+    try:
+        await d.page.keyboard.press("Control+y")
+        await asyncio.sleep(0.5)
+        shot = await d.screenshot("doc_redo.png")
+        r = Result(True, "Redo executed", shot)
+        _record("doc.redo", {}, r)
+        return r
+    except Exception as e:
+        return Result(False, f"Redo failed: {e}")
