@@ -24,11 +24,14 @@ class FastResult:
     total_elapsed_s: float = 0.0
     final_screenshot: Path | None = None
     step_times: list[tuple[str, float]] = None  # type: ignore[assignment]
+    action_results: list[dict[str, Any]] = None  # type: ignore[assignment]
     error: str | None = None
 
     def __post_init__(self) -> None:
         if self.step_times is None:
             self.step_times = []
+        if self.action_results is None:
+            self.action_results = []
 
     def summary(self) -> str:
         n = len(self.step_times)
@@ -52,6 +55,15 @@ async def execute(d: OnshapeDriver, plan: Plan) -> FastResult:
             action_result = await dispatch(d, tool, args)
             if hasattr(action_result, "ok") and not action_result.ok:
                 raise RuntimeError(action_result.note or f"{tool} reported failure")
+            if isinstance(action_result, dict) and action_result.get("ok") is False:
+                raise RuntimeError(action_result.get("error") or f"{tool} reported failure")
+            if hasattr(action_result, "to_dict"):
+                recorded = action_result.to_dict()
+            elif isinstance(action_result, dict):
+                recorded = action_result
+            else:
+                recorded = {"result": str(action_result)}
+            result.action_results.append({"tool": tool, "result": recorded})
             elapsed = time.monotonic() - step_t0
             result.step_times.append((f"{tool}({_compact(args)})", elapsed))
             print(f"  [{i}] {tool}({_compact(args)}) ({elapsed:.1f}s)", flush=True)

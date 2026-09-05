@@ -98,26 +98,73 @@ def parse(text: str) -> Plan | None:
     if not t:
         return None
 
-    if re.search(r"\bm\s*4\b", lower) and "screw" in lower and any(
-        word in lower for word in ("profile", "side", "revolve", "default")
-    ):
-        actions = [
-            Action("sketch.start", {"plane": "Front"}),
-            Action("sketch.rectangle", {
-                "corner1": [0.0, 0.0], "corner2": [20.0, 2.0],
-                "width": "20 mm", "height": "2 mm",
-            }),
-            Action("sketch.rectangle", {
-                "corner1": [-4.0, 0.0], "corner2": [0.0, 3.5],
-                "width": "4 mm", "height": "3.5 mm",
-            }),
-            Action("sketch.exit", {}),
-        ]
+    # Deterministic ISO-coarse M4 socket-head cap screw half-profile.
+    # The two adjacent regions are suitable for a later revolve around
+    # their lower horizontal edge and do not require the Gemini fallback.
+    is_m4_profile_create = bool(
+        re.search(r"\bm\s*4(?:[x×\s]|\b)", lower)
+        and "screw" in lower
+        and any(
+            word in lower
+            for word in (
+                "half-profile",
+                "half profile",
+                "side profile",
+                "profile",
+                "side",
+                "defaults for",
+                "create",
+                "draw",
+                "sketch",
+                "default",
+            )
+        )
+        and not re.search(r"^\s*revolve\b|\brevolve\s+(?:the|sketch|it|sketch\s*\d+)\b", lower)
+    )
+    if is_m4_profile_create:
+        actions = [Action("sketch.m4_profile", {"length_mm": 20.0})]
         return Plan(
             actions,
             "M4×20 socket-head cap screw half-profile on Front plane "
             "(4 mm shaft, 7 mm head diameter, 4 mm head height, 0.7 mm coarse pitch)",
         )
+
+    # Deterministic revolve
+    if "revolve" in lower and not any(w in lower for w in ("half-profile", "half profile", "side profile", "draw", "sketch.start")):
+        return Plan(
+            [Action("feature.revolve", {"angle_deg": 360.0})],
+            "Revolve sketch region 360 degrees around axis",
+        )
+
+    # Deterministic feature deletion: "delete Sketch 1", "delete Sketch 1, Sketch 2", "delete all sketches", etc.
+    if re.search(r"\b(?:delete|remove|clear)\s+(?:all\s+)?(?:features|sketches|parts|everything)\b", lower) or lower in ("clear all", "delete all"):
+        return Plan([Action("features.delete_all")], "Delete all features from Part Studio")
+
+    if any(w in lower for w in ("delete", "remove", "drop")) and not any(w in lower for w in ("line", "point", "constraint")):
+        m = re.search(r"(?:delete|remove|drop)\s+(.*?)(?:leaving|keep|\.|$)", t, re.IGNORECASE)
+        if m:
+            del_str = m.group(1).strip()
+            raw_parts = [p.strip() for p in re.split(r",|\band\b", del_str) if p.strip()]
+            targets = []
+            for p in raw_parts:
+                cleaned = re.sub(r"^(?:the|feature)\s+", "", p, flags=re.IGNORECASE).strip()
+                if cleaned:
+                    targets.append(cleaned)
+            if targets:
+                if any(tgt.lower().startswith("all") or tgt.lower() in ("everything",) for tgt in targets):
+                    return Plan([Action("features.delete_all")], "Delete all features from Part Studio")
+                actions = [Action("feature.delete", {"name": tgt}) for tgt in targets]
+                return Plan(actions, f"Delete feature(s): {', '.join(targets)}")
+
+    # Deterministic features list intent
+    if any(p in lower for p in ("list features", "show features", "existing features", "get features")):
+        return Plan([Action("features.list")], "List features in Part Studio")
+
+    # Deterministic undo / redo
+    if lower in ("undo", "revert", "undo last"):
+        return Plan([Action("doc.undo")], "Undo last action")
+    if lower in ("redo"):
+        return Plan([Action("doc.redo")], "Redo last action")
 
     # Detect shape type
     is_rect = any(w in lower for w in ("box", "rectangle", "rect", "square"))

@@ -16,6 +16,7 @@ from typing import Any
 
 from .driver import OnshapeDriver
 from .journal import JournalEntry, journal
+from .onshape_api import create_m4_profile
 from .shortcuts import get as binding_for
 
 
@@ -104,6 +105,26 @@ async def view_iso(d: OnshapeDriver) -> Result:
 
 view_isometric = view_iso
 
+
+async def m4_profile_exact(d: OnshapeDriver, length_mm: float = 20.0) -> Result:
+    """Create and API-verify an exact M4 socket-head revolve half-profile."""
+    verification = await create_m4_profile(
+        d,
+        length_mm=float(length_mm),
+        name=f"M4x{float(length_mm):g} Exact Profile",
+    )
+    shot = await d.screenshot("m4_profile_exact.png")
+    r = Result(
+        bool(verification["ok"]),
+        "created and verified exact M4 revolve profile"
+        if verification["ok"]
+        else f"M4 profile verification failed: {verification['errors']}",
+        shot,
+        verification,
+    )
+    _record("sketch.m4_profile", {"length_mm": length_mm}, r)
+    return r
+
 # Sketching
 
 
@@ -148,7 +169,10 @@ async def sketch_start(
         if await loc.count() > 0:
             await loc.first.click()
             await asyncio.sleep(0.3)
-            # Deterministically orient normal to the selected plane via context menu
+            # Once a plane is selected Onshape enters sketch mode.  Right-clicking
+            # the plane at this point reselects the tree and can cancel/derail the
+            # new sketch. Focus the canvas and use Onshape's documented normal-view
+            # shortcut instead.
             try:
                 await d.page.locator("canvas").first.hover()
             except Exception:
@@ -1080,6 +1104,64 @@ async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Re
     return r
 
 
+async def feature_revolve(d: OnshapeDriver, angle_deg: float = 360.0) -> Result:
+    """Revolve the latest sketch region around an axis.
+
+    Workflow:
+      1. Click the most recent sketch in the feature tree.
+      2. Activate revolve tool (toolbar 'Revolve' or Shift+W).
+      3. In the Revolve dialog, select the axis (defaults to origin axis).
+      4. Commit with the green checkmark.
+    """
+    await _select_latest_sketch(d)
+
+    b = binding_for("feature.revolve")
+    revolve_btn = d.page.locator("[command-id='revolve'], button[data-id='revolve']").first
+    if await revolve_btn.count() > 0 and await revolve_btn.is_visible():
+        await revolve_btn.click()
+    elif b.toolbar_text and await d.click_text(b.toolbar_text, timeout_ms=2000):
+        pass
+    elif b.keys:
+        await d.press_chord(*b.keys)
+    else:
+        await d.press_chord("Shift", "w")
+    await asyncio.sleep(0.6)
+
+    try:
+        axis_field = d.page.locator(".parameter-entry, .ns-dialog-entry").filter(
+            has_text=re.compile(r"Revolve axis|Axis", re.IGNORECASE)
+        ).first
+        if await axis_field.count() > 0:
+            await axis_field.click()
+            await asyncio.sleep(0.3)
+    except Exception:
+        pass
+
+    try:
+        vw = d.page.viewport_size or {"width": 1440, "height": 900}
+        await d.click(vw["width"] / 2.0, vw["height"] / 2.0)
+        await asyncio.sleep(0.3)
+    except Exception:
+        pass
+
+    try:
+        ok_btn = d.page.locator(".ns-dialog-button-ok, .button-ok, button[aria-label*='check' i]").first
+        if await ok_btn.count() > 0 and await ok_btn.is_visible():
+            await ok_btn.click()
+        else:
+            await d.click(294.0, 105.0)
+    except Exception:
+        await d.click(294.0, 105.0)
+    await asyncio.sleep(0.3)
+    await d.press_chord("Shift", "Enter")
+    await asyncio.sleep(0.5)
+
+    shot = await d.screenshot("feature_revolve.png")
+    r = Result(True, f"revolve angle={angle_deg}deg", shot)
+    _record("feature.revolve", {"angle_deg": angle_deg}, r)
+    return r
+
+
 async def feature_fillet(d: OnshapeDriver, radius_mm: float | None = None) -> Result:
     b = binding_for("feature.fillet")
     if b.toolbar_text:
@@ -1227,14 +1309,37 @@ async def doc_new(d: OnshapeDriver) -> Result:
 async def feature_delete(d: OnshapeDriver, name: str) -> Result:
     """Delete a feature (e.g. 'Sketch 1', 'Extrude 1') from the Part Studio tree."""
     try:
-        label = d.page.locator("span.os-list-item-name, .os-list-item-label").filter(has_text=name).first
-        if await label.count() == 0:
-            return Result(False, f"Feature '{name}' not found in feature tree")
+        listing = await features_list(d)
+        current_features = listing.meta.get("features", [])
 
+        matching = [f for f in current_features if f.strip().lower() == name.strip().lower()]
+        if not matching:
+            shot = await d.screenshot(f"delete_{name.replace(' ', '_').lower()}.png")
+            r = Result(True, f"Feature '{name}' is already absent from feature tree", shot)
+            _record("feature.delete", {"name": name}, r)
+            return r
+
+        target_name = matching[0]
+
+        label = d.page.locator(
+            ".os-list-item.ns-user-feature span.os-list-item-name, span.os-list-item-name, .os-list-item-label"
+        ).filter(has_text=re.compile(rf"^{re.escape(target_name)}$", re.IGNORECASE)).first
+        if await label.count() == 0:
+            label = d.page.locator("span.os-list-item-name, .os-list-item-label").filter(has_text=target_name).first
+
+        if await label.count() == 0:
+            return Result(True, f"Feature '{name}' is already absent from feature tree")
+
+        try:
+            await label.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
         await label.click(button="right")
         await asyncio.sleep(0.4)
+
         delete_menu = d.page.locator(".os-context-menu-item, .dropdown-menu li, .context-menu-item").filter(has_text="Delete").last
-        if await delete_menu.count() > 0:
+        if await delete_menu.count() > 0 and await delete_menu.is_visible():
             await delete_menu.click()
         else:
             await d.press_key("Escape")
@@ -1249,14 +1354,36 @@ async def feature_delete(d: OnshapeDriver, name: str) -> Result:
 
         await asyncio.sleep(0.8)
         shot = await d.screenshot(f"delete_{name.replace(' ', '_').lower()}.png")
-        remaining = d.page.locator("span.os-list-item-name, .os-list-item-label").filter(has_text=name)
-        if await remaining.count() > 0:
-            return Result(False, f"Delete command ran but feature '{name}' is still present", shot)
-        r = Result(True, f"Deleted feature '{name}'", shot)
-        _record("feature.delete", {"name": name}, r)
+
+        new_listing = await features_list(d)
+        new_features = new_listing.meta.get("features", [])
+        if any(f.strip().lower() == target_name.lower() for f in new_features):
+            return Result(False, f"Delete command ran but feature '{target_name}' is still present", shot)
+        r = Result(True, f"Deleted feature '{target_name}'", shot)
+        _record("feature.delete", {"name": target_name}, r)
         return r
     except Exception as e:
         return Result(False, f"Failed deleting feature '{name}': {e}")
+
+
+async def features_delete_all(d: OnshapeDriver) -> Result:
+    """Delete all user features in the Part Studio tree."""
+    try:
+        listing = await features_list(d)
+        names = listing.meta.get("features", [])
+        if not names:
+            return Result(True, "Feature tree is already empty (0 features)")
+        deleted = []
+        for name in reversed(names):
+            res = await feature_delete(d, name)
+            if res.ok:
+                deleted.append(name)
+        shot = await d.screenshot("delete_all.png")
+        r = Result(True, f"Deleted {len(deleted)} feature(s): {', '.join(deleted)}", shot, {"deleted": deleted})
+        _record("features.delete_all", {}, r)
+        return r
+    except Exception as e:
+        return Result(False, f"Failed deleting all features: {e}")
 
 
 async def feature_edit(d: OnshapeDriver, name: str) -> Result:

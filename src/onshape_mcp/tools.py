@@ -36,6 +36,13 @@ SKETCH_EXIT = ToolSpec(
     next_steps=["feature.extrude", "feature.revolve", "feature.fillet", "feature.chamfer"],
     status="working",
 )
+SKETCH_M4_PROFILE = ToolSpec(
+    name="sketch.m4_profile",
+    purpose="Create and API-verify an exact closed M4 socket-head half-profile on Front for a later revolve.",
+    produces=["sketch.closed=true", "sketch.verified=true"],
+    next_steps=["feature.revolve"],
+    status="working",
+)
 
 # Sketch Primitives
 SKETCH_LINE = ToolSpec(
@@ -449,6 +456,7 @@ ALL_TOOLS: list[ToolSpec] = [
     # Lifecycle
     SKETCH_START,
     SKETCH_EXIT,
+    SKETCH_M4_PROFILE,
     # Primitives
     SKETCH_LINE,
     SKETCH_LINE_MIDPOINT,

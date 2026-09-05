@@ -402,6 +402,10 @@ BINDINGS: dict[str, Binding] = {
     # Sketch lifecycle
     "sketch.start": SKETCH_START,
     "sketch.exit": SKETCH_EXIT,
+    "sketch.m4_profile": Binding(
+        confidence="high",
+        notes="Exact geometry is created with the authenticated Onshape Feature API.",
+    ),
     # Sketch Primitives
     "sketch.line": SKETCH_LINE,
     "sketch.line_midpoint": SKETCH_LINE_MIDPOINT,

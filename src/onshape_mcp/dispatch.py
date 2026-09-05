@@ -84,6 +84,9 @@ def _dim_val(args: dict[str, Any], key: str) -> Any:
 
 # Tool name -> async fn(d, args) that calls the right ui_action.
 TOOL_DISPATCH: dict[str, Any] = {
+    "sketch.m4_profile": lambda d, a: ui_actions.m4_profile_exact(
+        d, float(a.get("length_mm", 20.0))
+    ),
     "feature.delete": lambda d, a: ui_actions.feature_delete(d, a["name"]),
     "feature.list": lambda d, a: ui_actions.features_list(d),
     "document.undo": lambda d, a: ui_actions.doc_undo(d),
@@ -297,6 +300,13 @@ TOOL_DISPATCH: dict[str, Any] = {
     "screenshot": lambda d, a: ui_actions.screenshot_only(d, a.get("name", "agent.png")),
     "doc.open": lambda d, a: ui_actions.doc_open(d, a.get("url", "")),
     "doc.new": lambda d, a: ui_actions.doc_new(d),
+    "feature.delete": lambda d, a: ui_actions.feature_delete(d, a.get("name", "")),
+    "features.delete_all": lambda d, a: ui_actions.features_delete_all(d),
+    "feature.revolve": lambda d, a: ui_actions.feature_revolve(d, float(a.get("angle_deg", 360.0))),
+    "feature.edit": lambda d, a: ui_actions.feature_edit(d, a.get("name", "")),
+    "features.list": lambda d, a: ui_actions.features_list(d),
+    "doc.undo": lambda d, a: ui_actions.doc_undo(d),
+    "doc.redo": lambda d, a: ui_actions.doc_redo(d),
 }
 
 

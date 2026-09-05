@@ -160,9 +160,36 @@ class TestPlanStructure:
 def test_parse_default_m4_screw_profile_without_vision():
     plan = parse("use the defaults for an M4 screw side profile for revolve")
     assert plan is not None
-    assert [a.tool for a in plan.actions] == [
-        "sketch.start", "sketch.rectangle", "sketch.rectangle", "sketch.exit"
-    ]
-    assert plan.actions[0].args["plane"] == "Front"
-    assert plan.actions[1].args["width"] == "20 mm"
-    assert plan.actions[2].args["height"] == "3.5 mm"
+    assert [a.tool for a in plan.actions] == ["sketch.m4_profile"]
+    assert plan.actions[0].args["length_mm"] == 20.0
+
+
+def test_parse_revolve():
+    plan = parse("revolve Sketch 4 around the horizontal axis to create the 3d screw")
+    assert plan is not None
+    assert [a.tool for a in plan.actions] == ["feature.revolve"]
+    assert plan.actions[0].args["angle_deg"] == 360.0
+
+    plan2 = parse("revolve the screw profile")
+    assert plan2 is not None
+    assert [a.tool for a in plan2.actions] == ["feature.revolve"]
+
+
+def test_parse_delete():
+    plan = parse("delete Sketch 1")
+    assert plan is not None
+    assert [a.tool for a in plan.actions] == ["feature.delete"]
+    assert plan.actions[0].args["name"] == "Sketch 1"
+
+    plan_multi = parse("delete Sketch 1, Sketch 2, and Sketch 3")
+    assert plan_multi is not None
+    assert [a.tool for a in plan_multi.actions] == ["feature.delete", "feature.delete", "feature.delete"]
+    assert [a.args["name"] for a in plan_multi.actions] == ["Sketch 1", "Sketch 2", "Sketch 3"]
+
+    plan_all = parse("delete all sketches")
+    assert plan_all is not None
+    assert [a.tool for a in plan_all.actions] == ["features.delete_all"]
+
+    plan_clear = parse("clear all features")
+    assert plan_clear is not None
+    assert [a.tool for a in plan_clear.actions] == ["features.delete_all"]

@@ -12,6 +12,12 @@ import os
 import sys
 from pathlib import Path
 
+import enum
+if not hasattr(enum, "StrEnum"):
+    class StrEnum(str, enum.Enum):
+        pass
+    enum.StrEnum = StrEnum
+
 # Add src to sys.path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 

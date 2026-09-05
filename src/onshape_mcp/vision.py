@@ -55,6 +55,11 @@ class GeminiWeb:
         if self._client is not None:
             return
         try:
+            import enum
+            if not hasattr(enum, "StrEnum"):
+                class StrEnum(str, enum.Enum):
+                    pass
+                enum.StrEnum = StrEnum
             from gemini_webapi import GeminiClient  # type: ignore
         except ImportError as e:  # pragma: no cover
             raise RuntimeError(

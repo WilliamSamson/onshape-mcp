@@ -10,6 +10,7 @@ secrets/
 *.pem
 *.key
 *.token
+issue-resolution-artifacts/
 
 # Browser session (cookies keep you logged into Onshape / Gemini)
 cookies/

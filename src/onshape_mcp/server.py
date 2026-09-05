@@ -337,6 +337,20 @@ async def onshape_sketch_point(x: float, y: float) -> str:
 
 
 @mcp.tool()
+async def onshape_m4_profile(length_mm: float = 20.0) -> str:
+    """Create an exact, closed M4 socket-head cap-screw half-profile on Front.
+
+    Uses the authenticated Onshape Feature API rather than pixel sizing and
+    returns measured segment endpoints/lengths. It does not perform the revolve.
+    """
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.m4_profile_exact(d, length_mm)).to_dict(), indent=2)
+    except Exception as e:
+        return _format_error("sketch.m4_profile", e)
+
+
+@mcp.tool()
 async def onshape_sketch_text(
     corner1_x: float, corner1_y: float, corner2_x: float, corner2_y: float, text: str
 ) -> str:
@@ -604,6 +618,7 @@ async def act(goal: str, max_steps: int = 25) -> str:
                     "goal": goal,
                     "summary": result_fast.summary(),
                     "actions_count": len(result_fast.step_times),
+                    "action_results": result_fast.action_results,
                     "total_elapsed_s": round(result_fast.total_elapsed_s, 1),
                     "final_screenshot": str(result_fast.final_screenshot)
                     if result_fast.final_screenshot
@@ -664,6 +679,40 @@ async def onshape_feature_delete(name: str) -> str:
 async def onshape_delete(name: str) -> str:
     """Delete a feature or sketch by name (alias for onshape_feature_delete)."""
     return await onshape_feature_delete(name)
+
+
+@mcp.tool()
+async def onshape_features_delete_all() -> str:
+    """Delete all features from the Part Studio tree."""
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.features_delete_all(d)
+        return json.dumps({"ok": res.ok, "message": res.note, "screenshot": str(res.screenshot) if res.screenshot else None})
+    except Exception as e:
+        return _format_error("onshape_features_delete_all", e)
+
+
+@mcp.tool()
+async def onshape_delete_all() -> str:
+    """Delete all features from the Part Studio tree (alias for onshape_features_delete_all)."""
+    return await onshape_features_delete_all()
+
+
+@mcp.tool()
+async def onshape_feature_revolve(angle_deg: float = 360.0) -> str:
+    """Revolve the latest sketch region around an axis into a solid 3D part."""
+    try:
+        d = await _driver_lazy()
+        res = await ui_actions.feature_revolve(d, angle_deg=angle_deg)
+        return json.dumps({"ok": res.ok, "message": res.note, "screenshot": str(res.screenshot) if res.screenshot else None})
+    except Exception as e:
+        return _format_error("onshape_feature_revolve", e)
+
+
+@mcp.tool()
+async def onshape_revolve(angle_deg: float = 360.0) -> str:
+    """Revolve the latest sketch region (alias for onshape_feature_revolve)."""
+    return await onshape_feature_revolve(angle_deg=angle_deg)
 
 
 @mcp.tool()
