@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import traceback
 from typing import Any
 
@@ -570,6 +571,9 @@ async def act(goal: str, max_steps: int = 25) -> str:
         plan = parse_intent(goal)
         if plan is not None:
             d = await _driver_lazy()
+            url_match = re.search(r"https://cad\.onshape\.com/[^\s)\]]+", goal)
+            if url_match:
+                await d.open(url_match.group(0))
             result_fast = await fast_execute(d, plan)
             return json.dumps(
                 {

@@ -49,7 +49,9 @@ async def execute(d: OnshapeDriver, plan: Plan) -> FastResult:
         tool = action.tool
         args = action.args
         try:
-            await dispatch(d, tool, args)
+            action_result = await dispatch(d, tool, args)
+            if hasattr(action_result, "ok") and not action_result.ok:
+                raise RuntimeError(action_result.note or f"{tool} reported failure")
             elapsed = time.monotonic() - step_t0
             result.step_times.append((f"{tool}({_compact(args)})", elapsed))
             print(f"  [{i}] {tool}({_compact(args)}) ({elapsed:.1f}s)", flush=True)

@@ -300,7 +300,7 @@ TOOL_DISPATCH: dict[str, Any] = {
 }
 
 
-async def dispatch(d: OnshapeDriver, tool: str | None, args: dict[str, Any]) -> None:
+async def dispatch(d: OnshapeDriver, tool: str | None, args: dict[str, Any]) -> Any:
     """Route a tool call. Unknown tools raise a clear error so the agent
     loop records it as a failure and the LLM can recover on the next
     step instead of crashing the whole run.

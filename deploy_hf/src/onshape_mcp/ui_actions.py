@@ -150,22 +150,22 @@ async def sketch_start(
             await asyncio.sleep(0.3)
             # Deterministically orient normal to the selected plane via context menu
             try:
-                await loc.first.click(button="right")
-                await asyncio.sleep(0.3)
-                normal_item = d.page.locator(
-                    "div.context-menu-item-text", has_text="View normal to"
-                )
-                if await normal_item.count() > 0:
-                    await normal_item.first.click()
-                else:
-                    await d.press_key("n")
+                await d.page.locator("canvas").first.hover()
             except Exception:
-                await d.press_key("n")
+                pass
+            await d.press_key("n")
         else:
             await d.click(65.0, 232.0)
             await asyncio.sleep(0.4)
             await d.press_key("n")
     await asyncio.sleep(1.2)
+    await asyncio.sleep(0.8)
+    active_dialog = d.page.locator(".feature-dialog:not(.ns-dialog-default-hidden)")
+    if await active_dialog.count() == 0:
+        shot = await d.screenshot("sketch_start_failed.png")
+        r = Result(False, f"Onshape did not enter sketch mode on {target_name}", shot)
+        _record("sketch.start", {"plane": target_name}, r)
+        return r
     shot = await d.screenshot("sketch_start.png")
     r = Result(True, f"sketch started on {target_name}", shot, {"plane": target_name})
     _record("sketch.start", {"plane": target_name}, r)
@@ -321,6 +321,9 @@ async def sketch_rectangle(
     quadrant: str | int | None = None,
     centered: bool | None = None,
 ) -> Result:
+    if await d.page.locator(".feature-dialog:not(.ns-dialog-default-hidden)").count() == 0:
+        return Result(False, "sketch.rectangle requires an active sketch")
+
     cx, cy = await get_canvas_origin(d)
     span_x = _parse_dim_px(width, default_px=120.0)
     span_y = _parse_dim_px(height, default_px=120.0)
@@ -937,8 +940,7 @@ async def sketch_exit(d: OnshapeDriver, commit: bool = True, **_kw) -> Result:
             await ok_btn.click()
         else:
             await d.click(424.0, 93.0)
-        await asyncio.sleep(0.5)
-        await d.press_chord("Shift", "Enter")
+        await asyncio.sleep(0.8)
     else:
         cancel_btn = d.page.locator(".ns-dialog-button-cancel, .button-cancel").first
         if await cancel_btn.count() > 0:
@@ -949,6 +951,12 @@ async def sketch_exit(d: OnshapeDriver, commit: bool = True, **_kw) -> Result:
     await d.press_key("Escape")
     await asyncio.sleep(0.5)
     after = await d.screenshot("sketch_exit_after.png")
+    if commit and await d.page.locator(
+        ".feature-dialog:not(.ns-dialog-default-hidden)"
+    ).count() > 0:
+        r = Result(False, "Sketch commit did not close the feature dialog", after)
+        _record("sketch.exit", {"commit": commit}, r)
+        return r
     r = Result(
         True, "exit sketch", after, {"before": str(before), "after": str(after), "commit": commit}
     )

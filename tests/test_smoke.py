@@ -208,6 +208,24 @@ def test_manage_chats_importable() -> None:
     assert spec is not None
 
 
+def test_fast_executor_stops_on_false_result() -> None:
+    import asyncio
+    from pathlib import Path
+    from unittest.mock import AsyncMock, patch
+
+    from onshape_mcp.fast_exec import execute
+    from onshape_mcp.intent import Action, Plan
+    from onshape_mcp.ui_actions import Result
+
+    driver = AsyncMock()
+    driver.screenshot.return_value = Path("/tmp/final.png")
+    plan = Plan([Action("sketch.start", {"plane": "Top"})], "test")
+    with patch("onshape_mcp.fast_exec.dispatch", AsyncMock(return_value=Result(False, "not active"))):
+        result = asyncio.run(execute(driver, plan))
+    assert result.ok is False
+    assert result.error == "sketch.start: not active"
+
+
 def test_intent_parses_5x5_cube() -> None:
     """The intent parser should produce a 4-action plan for the canonical
     '5x5 cube' goal."""
