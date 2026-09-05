@@ -1,19 +1,25 @@
-"""MCP server. Exposes the Onshape tool vocabulary as MCP tools. UI ops
-live in ui_actions.py and use the driver.py primitives. Every call goes
-through the journal so undo/replay/debug work.
+"""MCP server. Exposes the complete Onshape tool vocabulary as MCP tools.
+Designed for Claude Desktop, ChatGPT, and custom LLM clients.
+
+All tool executions are wrapped with error-handling to prevent JSON-RPC
+pipe crashes and provide clear, human-readable public messages.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import traceback
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from . import tools as datasheet
 from . import ui_actions
-from .dispatch import build_agent_system_prompt
+from .dispatch import TOOL_DISPATCH, build_agent_system_prompt, dispatch
 from .driver import OnshapeDriver
+from .fast_exec import execute as fast_execute
+from .intent import parse as parse_intent
 from .journal import JournalEntry, journal
 from .loop import AgentLoop
 from .vision import GeminiWeb
@@ -23,6 +29,20 @@ mcp = FastMCP("onshape-mcp")
 _driver: OnshapeDriver | None = None
 _vision: GeminiWeb | None = None
 _loop: AgentLoop | None = None
+
+
+def _format_error(tool_name: str, err: Exception) -> str:
+    """Return a clean JSON string with public error details."""
+    return json.dumps(
+        {
+            "ok": False,
+            "tool": tool_name,
+            "error": type(err).__name__,
+            "message": str(err),
+            "hint": "Check coordinates, tool preconditions, or document connection.",
+        },
+        indent=2,
+    )
 
 
 async def _driver_lazy() -> OnshapeDriver:
@@ -48,86 +68,115 @@ async def _loop_lazy() -> AgentLoop:
     return _loop
 
 
-# Meta tools
+# Meta & Information Tools
 
 
 @mcp.tool()
 async def screenshot(name: str = "shot.png") -> str:
-    """Take a screenshot of the current Onshape viewport. Returns the file path."""
-    d = await _driver_lazy()
-    path = await d.screenshot(name=name)
-    e = JournalEntry.new("screenshot", {"name": name})
-    e.screenshot = str(path)
-    journal.append(e)
-    return str(path)
+    """Take a screenshot of the current Onshape viewport. Returns the absolute file path."""
+    try:
+        d = await _driver_lazy()
+        path = await d.screenshot(name=name)
+        e = JournalEntry.new("screenshot", {"name": name})
+        e.screenshot = str(path)
+        journal.append(e)
+        return json.dumps({"ok": True, "screenshot": str(path), "message": f"Saved screenshot to {path}"})
+    except Exception as e:
+        return _format_error("screenshot", e)
 
 
 @mcp.tool()
 async def describe_view(question: str = "What do you see in the Onshape viewport?") -> str:
-    """Screenshot + ask Gemini web to describe it. Returns the model's answer."""
-    d = await _driver_lazy()
-    img = await d.screenshot("describe.png")
-    v = await _vision_lazy()
-    return await v.ask_with_image(question, img)
+    """Screenshot + ask Gemini vision to describe what's in the viewport."""
+    try:
+        d = await _driver_lazy()
+        img = await d.screenshot("describe.png")
+        v = await _vision_lazy()
+        desc = await v.ask_with_image(question, img)
+        return json.dumps({"ok": True, "description": desc})
+    except Exception as e:
+        return _format_error("describe_view", e)
 
 
 @mcp.tool()
 async def tool_datasheet() -> str:
-    """Return the Onshape tool vocabulary as a markdown block."""
+    """Return the entire Onshape tool vocabulary, parameters, and preconditions as markdown."""
     return datasheet.as_prompt_block()
 
 
 @mcp.tool()
 async def journal_tail(n: int = 20) -> str:
-    """Return the last N actions from the local journal (no screenshots)."""
+    """Return the last N actions executed against Onshape."""
     return json.dumps(journal.tail(n), indent=2, ensure_ascii=False)
 
 
 @mcp.tool()
 async def open_doc(url: str) -> str:
-    """Navigate to an Onshape document URL or `d/<docId>/e/<elementId>` path."""
-    d = await _driver_lazy()
-    full = url if url.startswith("http") else f"https://cad.onshape.com/{url.lstrip('/')}"
-    await d.open(full)
-    journal.append(JournalEntry.new("doc.open", {"url": full}))
-    return f"opened {full}"
+    """Navigate to an Onshape document URL or path."""
+    try:
+        d = await _driver_lazy()
+        full = url if url.startswith("http") else f"https://cad.onshape.com/{url.lstrip('/')}"
+        await d.open(full)
+        journal.append(JournalEntry.new("doc.open", {"url": full}))
+        return json.dumps({"ok": True, "message": f"Opened document {full}"})
+    except Exception as e:
+        return _format_error("open_doc", e)
 
 
 @mcp.tool()
 async def viewport_size() -> str:
     """Return the current viewport dimensions in pixels."""
-    d = await _driver_lazy()
-    return json.dumps(await d.viewport_box())
+    try:
+        d = await _driver_lazy()
+        return json.dumps(await d.viewport_box())
+    except Exception as e:
+        return _format_error("viewport_size", e)
 
 
-# View and camera
+# View & Camera Tools
 
 
 @mcp.tool()
 async def onshape_view_fit() -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.view_fit(d)).to_dict())
+    """Zoom and pan to fit all visible geometry in the viewport ('f')."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.view_fit(d)).to_dict())
+    except Exception as e:
+        return _format_error("view.fit", e)
 
 
 @mcp.tool()
 async def onshape_view_top() -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.view_top(d)).to_dict())
+    """Orient camera to look directly at the Top view."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.view_top(d)).to_dict())
+    except Exception as e:
+        return _format_error("view.top", e)
 
 
 @mcp.tool()
 async def onshape_view_front() -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.view_front(d)).to_dict())
+    """Orient camera to look directly at the Front view."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.view_front(d)).to_dict())
+    except Exception as e:
+        return _format_error("view.front", e)
 
 
 @mcp.tool()
 async def onshape_view_iso() -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.view_iso(d)).to_dict())
+    """Orient camera to Isometric view."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.view_iso(d)).to_dict())
+    except Exception as e:
+        return _format_error("view.iso", e)
 
 
-# Sketch tools
+# Sketch Creation Tools
 
 
 @mcp.tool()
@@ -136,11 +185,24 @@ async def onshape_sketch_start(
     plane_y: float | None = None,
     plane: str | None = None,
 ) -> str:
-    """Click the Sketch button, then click a plane. Pass plane name ('Top', 'Front', 'Right')
-    or coordinates. Default is 'Top'."""
-    d = await _driver_lazy()
-    pt = (plane_x, plane_y) if plane_x is not None and plane_y is not None else None
-    return json.dumps((await ui_actions.sketch_start(d, pt, plane_name=plane)).to_dict())
+    """Open a new sketch. Pass plane name ('Top', 'Front', 'Right') or plane_x/plane_y coordinates.
+    Default plane is 'Top'. Automatically aligns camera normal to the sketch plane."""
+    try:
+        d = await _driver_lazy()
+        pt = (plane_x, plane_y) if plane_x is not None and plane_y is not None else None
+        return json.dumps((await ui_actions.sketch_start(d, pt, plane_name=plane)).to_dict())
+    except Exception as e:
+        return _format_error("sketch.start", e)
+
+
+@mcp.tool()
+async def onshape_sketch_exit(commit: bool = True) -> str:
+    """Exit the active sketch and accept (commit=True) or discard (commit=False) changes."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.sketch_exit(d, commit=commit)).to_dict())
+    except Exception as e:
+        return _format_error("sketch.exit", e)
 
 
 @mcp.tool()
@@ -154,16 +216,21 @@ async def onshape_sketch_rectangle(
     quadrant: str | int | None = None,
     centered: bool | None = None,
 ) -> str:
-    d = await _driver_lazy()
-    c1 = (corner1_x, corner1_y) if corner1_x is not None and corner1_y is not None else None
-    c2 = (corner2_x, corner2_y) if corner2_x is not None and corner2_y is not None else None
-    return json.dumps(
-        (
-            await ui_actions.sketch_rectangle(
-                d, c1, c2, width=width, height=height, quadrant=quadrant, centered=centered
-            )
-        ).to_dict()
-    )
+    """Draw a rectangle. Accepts dimensions (e.g. width='10 cm', height='5 cm'), quadrant ('1', '2', '3', '4'),
+    or centered=True. Dimensions are automatically driven into Onshape's solver."""
+    try:
+        d = await _driver_lazy()
+        c1 = (corner1_x, corner1_y) if corner1_x is not None and corner1_y is not None else None
+        c2 = (corner2_x, corner2_y) if corner2_x is not None and corner2_y is not None else None
+        return json.dumps(
+            (
+                await ui_actions.sketch_rectangle(
+                    d, c1, c2, width=width, height=height, quadrant=quadrant, centered=centered
+                )
+            ).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.rectangle", e)
 
 
 @mcp.tool()
@@ -173,142 +240,374 @@ async def onshape_sketch_circle(
     radius_px: float = 50.0,
     centered: bool | None = None,
 ) -> str:
-    d = await _driver_lazy()
-    center = (center_x, center_y) if center_x is not None and center_y is not None else None
-    return json.dumps(
-        (await ui_actions.sketch_circle(d, center, radius_px, centered=centered)).to_dict()
-    )
+    """Draw a circle. Pass center coordinates (center_x, center_y) or centered=True for origin."""
+    try:
+        d = await _driver_lazy()
+        center = (center_x, center_y) if center_x is not None and center_y is not None else None
+        return json.dumps(
+            (await ui_actions.sketch_circle(d, center, radius_px, centered=centered)).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.circle", e)
 
 
 @mcp.tool()
 async def onshape_sketch_line(p1_x: float, p1_y: float, p2_x: float, p2_y: float) -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.sketch_line(d, (p1_x, p1_y), (p2_x, p2_y))).to_dict())
+    """Draw a line segment from (p1_x, p1_y) to (p2_x, p2_y)."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.sketch_line(d, (p1_x, p1_y), (p2_x, p2_y))).to_dict())
+    except Exception as e:
+        return _format_error("sketch.line", e)
+
+
+@mcp.tool()
+async def onshape_sketch_polygon(
+    sides: int = 6,
+    radius: float = 60.0,
+    center_x: float | None = None,
+    center_y: float | None = None,
+    circumscribed: bool = False,
+) -> str:
+    """Draw an inscribed or circumscribed polygon with N sides and radius."""
+    try:
+        d = await _driver_lazy()
+        center = (center_x, center_y) if center_x is not None and center_y is not None else None
+        return json.dumps(
+            (
+                await ui_actions.sketch_polygon(
+                    d, center=center, radius=radius, sides=sides, circumscribed=circumscribed
+                )
+            ).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.polygon", e)
+
+
+@mcp.tool()
+async def onshape_sketch_spline(points: list[list[float]]) -> str:
+    """Draw a smooth spline curve through a list of [[x1, y1], [x2, y2], ...] points."""
+    try:
+        d = await _driver_lazy()
+        pts = [(p[0], p[1]) for p in points]
+        return json.dumps((await ui_actions.sketch_spline(d, pts)).to_dict())
+    except Exception as e:
+        return _format_error("sketch.spline", e)
+
+
+@mcp.tool()
+async def onshape_sketch_arc(
+    p1_x: float,
+    p1_y: float,
+    p2_x: float,
+    p2_y: float,
+    radius_x: float | None = None,
+    radius_y: float | None = None,
+) -> str:
+    """Draw a 3-point arc from (p1_x, p1_y) to (p2_x, p2_y) passing through (radius_x, radius_y)."""
+    try:
+        d = await _driver_lazy()
+        rad_pt = (radius_x, radius_y) if radius_x is not None and radius_y is not None else None
+        return json.dumps(
+            (await ui_actions.sketch_arc(d, (p1_x, p1_y), (p2_x, p2_y), radius_pt=rad_pt)).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.arc", e)
+
+
+@mcp.tool()
+async def onshape_sketch_point(x: float, y: float) -> str:
+    """Place a sketch point at (x, y)."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.sketch_point(d, (x, y))).to_dict())
+    except Exception as e:
+        return _format_error("sketch.point", e)
+
+
+@mcp.tool()
+async def onshape_sketch_text(
+    corner1_x: float, corner1_y: float, corner2_x: float, corner2_y: float, text: str
+) -> str:
+    """Place sketch text in a box defined by corner1 and corner2."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps(
+            (
+                await ui_actions.sketch_text(
+                    d, (corner1_x, corner1_y), (corner2_x, corner2_y), text=text
+                )
+            ).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.text", e)
+
+
+# Sketch Modifications & Operations
+
+
+@mcp.tool()
+async def onshape_sketch_construction(x: float | None = None, y: float | None = None) -> str:
+    """Toggle construction mode, or convert the entity at (x, y) to/from construction geometry ('q')."""
+    try:
+        d = await _driver_lazy()
+        pt = (x, y) if x is not None and y is not None else None
+        return json.dumps((await ui_actions.sketch_construction(d, pt=pt)).to_dict())
+    except Exception as e:
+        return _format_error("sketch.construction", e)
+
+
+@mcp.tool()
+async def onshape_sketch_fillet(vertex_x: float, vertex_y: float, radius_mm: float = 5.0) -> str:
+    """Add a rounded 2D fillet of radius_mm at corner/vertex (vertex_x, vertex_y)."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps(
+            (await ui_actions.sketch_fillet(d, (vertex_x, vertex_y), radius_mm=radius_mm)).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.fillet", e)
+
+
+@mcp.tool()
+async def onshape_sketch_chamfer(
+    vertex_x: float, vertex_y: float, distance_mm: float = 5.0
+) -> str:
+    """Add a 2D chamfer of distance_mm at corner/vertex (vertex_x, vertex_y)."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps(
+            (
+                await ui_actions.sketch_chamfer(d, (vertex_x, vertex_y), distance_mm=distance_mm)
+            ).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.chamfer", e)
+
+
+@mcp.tool()
+async def onshape_sketch_trim(x: float, y: float) -> str:
+    """Trim a curve segment back to the nearest intersections by clicking at (x, y) ('m')."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.sketch_trim(d, (x, y))).to_dict())
+    except Exception as e:
+        return _format_error("sketch.trim", e)
+
+
+@mcp.tool()
+async def onshape_sketch_extend(x: float, y: float) -> str:
+    """Extend a curve endpoint at (x, y) to the nearest boundary ('x')."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.sketch_extend(d, (x, y))).to_dict())
+    except Exception as e:
+        return _format_error("sketch.extend", e)
+
+
+@mcp.tool()
+async def onshape_sketch_offset(
+    entity_x: float,
+    entity_y: float,
+    distance_mm: float = 5.0,
+    side_x: float | None = None,
+    side_y: float | None = None,
+) -> str:
+    """Offset curve at (entity_x, entity_y) by distance_mm toward optional side (side_x, side_y) ('o')."""
+    try:
+        d = await _driver_lazy()
+        side = (side_x, side_y) if side_x is not None and side_y is not None else None
+        return json.dumps(
+            (
+                await ui_actions.sketch_offset(
+                    d, (entity_x, entity_y), distance_mm=distance_mm, side_xy=side
+                )
+            ).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.offset", e)
+
+
+@mcp.tool()
+async def onshape_sketch_mirror(
+    centerline_x: float, centerline_y: float, entity_x: float, entity_y: float
+) -> str:
+    """Mirror an entity at (entity_x, entity_y) across a centerline at (centerline_x, centerline_y)."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps(
+            (
+                await ui_actions.sketch_mirror(
+                    d, (centerline_x, centerline_y), (entity_x, entity_y)
+                )
+            ).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.mirror", e)
+
+
+# Dimensions & Constraints
 
 
 @mcp.tool()
 async def onshape_sketch_dimension(
-    entity_x: float, entity_y: float, label_x: float, label_y: float, value_mm: float
+    entity_x: float, entity_y: float, label_x: float, label_y: float, value_mm: float | str
 ) -> str:
-    d = await _driver_lazy()
-    return json.dumps(
-        (
-            await ui_actions.sketch_dimension(d, (entity_x, entity_y), (label_x, label_y), value_mm)
-        ).to_dict()
-    )
+    """Drive an Onshape sketch dimension ('d'). Clicks entity at (entity_x, entity_y), places label
+    at (label_x, label_y), and enters value_mm into the solver."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps(
+            (
+                await ui_actions.sketch_dimension(
+                    d, (entity_x, entity_y), (label_x, label_y), value_mm
+                )
+            ).to_dict()
+        )
+    except Exception as e:
+        return _format_error("sketch.dimension", e)
 
 
 @mcp.tool()
-async def onshape_sketch_equal(
-    entity1_x: float, entity1_y: float, entity2_x: float, entity2_y: float
+async def onshape_sketch_constrain(
+    constraint_type: str,
+    entities: list[list[float]],
 ) -> str:
-    d = await _driver_lazy()
-    return json.dumps(
-        (await ui_actions.sketch_equal(d, (entity1_x, entity1_y), (entity2_x, entity2_y))).to_dict()
-    )
+    """Apply a geometric constraint across entities.
+    Valid types: coincident, concentric, parallel, tangent, horizontal, vertical,
+    perpendicular, equal, midpoint, normal, pierce, symmetric, fix."""
+    try:
+        d = await _driver_lazy()
+        pts = [(e[0], e[1]) for e in entities]
+        return json.dumps(
+            (await ui_actions.sketch_constrain(d, constraint_type, *pts)).to_dict()
+        )
+    except Exception as e:
+        return _format_error(f"constraint.{constraint_type}", e)
 
 
-@mcp.tool()
-async def onshape_sketch_exit(commit: bool = True) -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.sketch_exit(d, commit=commit)).to_dict())
-
-
-# Feature tools
+# Feature Operations
 
 
 @mcp.tool()
 async def onshape_feature_extrude(depth_mm: float | None = None) -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.feature_extrude(d, depth_mm)).to_dict())
+    """Extrude the active sketch or selected face by depth_mm."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.feature_extrude(d, depth_mm)).to_dict())
+    except Exception as e:
+        return _format_error("feature.extrude", e)
 
 
 @mcp.tool()
 async def onshape_feature_fillet(radius_mm: float | None = None) -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.feature_fillet(d, radius_mm)).to_dict())
+    """Round selected 3D model edges by radius_mm."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.feature_fillet(d, radius_mm)).to_dict())
+    except Exception as e:
+        return _format_error("feature.fillet", e)
 
 
 @mcp.tool()
 async def onshape_feature_chamfer(distance_mm: float | None = None) -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.feature_chamfer(d, distance_mm)).to_dict())
+    """Bevel selected 3D model edges by distance_mm."""
+    try:
+        d = await _driver_lazy()
+        return json.dumps((await ui_actions.feature_chamfer(d, distance_mm)).to_dict())
+    except Exception as e:
+        return _format_error("feature.chamfer", e)
 
 
-# Selection
-
-
-@mcp.tool()
-async def onshape_select_face(x: float, y: float) -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.select_face(d, x, y)).to_dict())
-
-
-@mcp.tool()
-async def onshape_select_edge(x: float, y: float) -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.select_edge(d, x, y)).to_dict())
-
-
-# Undo and redo
+# Generic Tool Dispatcher (with clean un-bound tool guard)
 
 
 @mcp.tool()
-async def onshape_ui_undo() -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.undo(d)).to_dict())
+async def onshape_execute(tool: str, args: dict[str, Any] | None = None) -> str:
+    """Generic tool dispatcher. Calls any registered tool by name with arguments.
+    Returns clear public error messages if a tool is un-bound or fails."""
+    if tool not in TOOL_DISPATCH:
+        return json.dumps(
+            {
+                "ok": False,
+                "tool": tool,
+                "error": "ToolNotBoundError",
+                "message": f"Tool '{tool}' is not bound or supported. Please choose from available tools.",
+                "available_tools": sorted(TOOL_DISPATCH.keys()),
+            },
+            indent=2,
+        )
+    try:
+        d = await _driver_lazy()
+        res = await dispatch(d, tool, args or {})
+        out = res.to_dict() if hasattr(res, "to_dict") else {"ok": True, "result": str(res)}
+        return json.dumps(out, indent=2)
+    except Exception as e:
+        return _format_error(tool, e)
+
+
+# Autonomous Agent (Fast Path + Vision Loop)
 
 
 @mcp.tool()
-async def onshape_ui_redo() -> str:
-    d = await _driver_lazy()
-    return json.dumps((await ui_actions.redo(d)).to_dict())
+async def act(goal: str, max_steps: int = 25) -> str:
+    """Autonomous CAD agent. Takes a high-level goal in natural language (e.g.
+    'draw a 10cm by 5cm box in Quadrant 1 on the top plane', 'draw a 6-sided polygon')
+    and executes it. Tries deterministic fast execution first (10-20s), falling back
+    to vision loop if ambiguous."""
+    try:
+        # 1. Try fast path first
+        plan = parse_intent(goal)
+        if plan is not None:
+            d = await _driver_lazy()
+            result_fast = await fast_execute(d, plan)
+            return json.dumps(
+                {
+                    "ok": result_fast.ok,
+                    "mode": "fast_path",
+                    "goal": goal,
+                    "summary": result_fast.summary(),
+                    "actions_count": len(result_fast.step_times),
+                    "total_elapsed_s": round(result_fast.total_elapsed_s, 1),
+                    "final_screenshot": str(result_fast.final_screenshot)
+                    if result_fast.final_screenshot
+                    else None,
+                    "error": result_fast.error,
+                },
+                indent=2,
+            )
 
-
-# Closed-loop agent
-
-# Cap the loop so a runaway agent doesn't burn the day.
-MAX_AGENT_STEPS = 25
-
-
-@mcp.tool()
-async def act(goal: str, max_steps: int = MAX_AGENT_STEPS) -> str:
-    """Closed-loop agent: take a goal in natural language, drive the Onshape
-    UI to achieve it. Uses Gemini web for vision + reasoning. Returns a
-    summary of actions taken and the final screenshot.
-    """
-    loop = await _loop_lazy()
-    result = await loop.run(goal, max_steps=max_steps)
-    tail = [
-        {
-            "step": r.step,
-            "tool": r.decision.get("tool"),
-            "args": r.decision.get("args", {}),
-            "ok": r.ok,
-            "error": r.error,
-        }
-        for r in result.steps[-5:]
-    ]
-    return json.dumps(
-        {
-            "goal": goal,
-            "completed": result.completed,
-            "summary": result.summary(),
-            "stop_reason": result.stop_reason,
-            "steps_total": len(result.steps),
-            "transcript_tail": tail,
-            "final_screenshot": str(result.final_screenshot) if result.final_screenshot else None,
-        },
-        indent=2,
-        ensure_ascii=False,
-    )
-
-
-@mcp.tool()
-async def agent_system_prompt() -> str:
-    """Return the system prompt used by the act() tool. Useful for debugging
-    what the LLM sees."""
-    return build_agent_system_prompt()
+        # 2. Fallback to vision loop
+        loop = await _loop_lazy()
+        result_loop = await loop.run(goal, max_steps=max_steps)
+        tail = [
+            {
+                "step": r.step,
+                "tool": r.decision.get("tool"),
+                "args": r.decision.get("args", {}),
+                "ok": r.ok,
+                "error": r.error,
+            }
+            for r in result_loop.steps[-5:]
+        ]
+        return json.dumps(
+            {
+                "ok": result_loop.completed,
+                "mode": "vision_loop",
+                "goal": goal,
+                "summary": result_loop.summary(),
+                "total_elapsed_s": round(result_loop.total_elapsed_s, 1),
+                "steps_total": len(result_loop.steps),
+                "transcript_tail": tail,
+                "final_screenshot": str(result_loop.final_screenshot)
+                if result_loop.final_screenshot
+                else None,
+                "stop_reason": result_loop.stop_reason,
+            },
+            indent=2,
+        )
+    except Exception as e:
+        return _format_error("act", e)
 
 
 # Lifecycle
