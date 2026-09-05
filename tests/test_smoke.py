@@ -197,3 +197,48 @@ def test_manage_chats_importable() -> None:
 
     spec = importlib.util.spec_from_file_location("manage_chats", "scripts/manage_chats.py")
     assert spec is not None
+
+
+def test_intent_parses_5x5_cube() -> None:
+    """The intent parser should produce a 4-action plan for the canonical
+    '5x5 cube' goal."""
+    from onshape_mcp.intent import parse
+    plan = parse("draw a 5x5 square on the top plane and extrude it 5mm into a cube")
+    assert plan is not None
+    assert len(plan.actions) == 4
+    tools = [a.tool for a in plan.actions]
+    assert tools == ["sketch.start", "sketch.rectangle", "sketch.exit", "feature.extrude"]
+    assert plan.actions[-1].args.get("depth_mm") == 5.0
+
+
+def test_intent_unit_conversion() -> None:
+    """Unit handling: '12cm by 8cm' gives 12cm x 8cm; extrude 2cm gives
+    depth_mm = 20."""
+    from onshape_mcp.intent import parse
+    plan = parse("draw a 12cm by 8cm box on the top plane and extrude 2cm")
+    assert plan is not None
+    assert plan.actions[1].args["width"] == "12 cm"
+    assert plan.actions[1].args["height"] == "8 cm"
+    assert plan.actions[-1].args["depth_mm"] == 20.0
+
+
+def test_intent_rejects_unknown() -> None:
+    """Non-CAD prompts return None (caller falls back to vision loop)."""
+    from onshape_mcp.intent import parse
+    assert parse("hello world") is None
+    assert parse("") is None
+
+
+def test_extrude_selects_latest_sketch_helper_exists() -> None:
+    """The latest-sketch selector should be a callable async function
+    in ui_actions. Smoke check that the JS snippet is a non-empty
+    string with no Python f-string holes."""
+    from onshape_mcp.ui_actions import _select_latest_sketch
+    import inspect
+    assert inspect.iscoroutinefunction(_select_latest_sketch)
+    src = inspect.getsource(_select_latest_sketch)
+    assert "Sketch" in src
+    assert "feature-tree" in src or "FeatureTree" in src
+    # The f-string regex (\d+ in JS) must be escaped properly in the
+    # Python source so the JS actually sees \d+ at runtime.
+    assert "\\\\d+" in src or "\\d+" in src

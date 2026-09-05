@@ -522,10 +522,63 @@ async def sketch_exit(d: OnshapeDriver, commit: bool = True, **_kw) -> Result:
 # Feature tools
 
 
-async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Result:
-    """Extrude the active sketch region. If depth is None, opens the
-    extrude dialog and screenshots so the LLM loop can type a value.
+async def _select_latest_sketch(d: OnshapeDriver) -> bool:
+    """Click the most recent sketch in Onshape's feature tree so the
+    extrude tool knows what region to use. Returns True if a sketch was
+    selected, False otherwise.
+
+    When the doc has multiple sketches, pressing E with nothing selected
+    picks nothing and Onshape shows "Select face or sketch region to
+    extrude". Clicking the latest sketch in the tree pre-selects it.
     """
+    try:
+        clicked = await d.page.evaluate(
+            """() => {
+                // Feature tree rows. Onshape uses a few different class
+                // names across versions; grab anything that looks like
+                // a tree node containing a Sketch label.
+                const candidates = document.querySelectorAll(
+                    '[class*="feature-tree"] [class*="item"], ' +
+                    '[class*="FeatureTree"] [class*="item"], ' +
+                    '[data-test*="feature-tree"] [class*="row"]'
+                );
+                let best = null;
+                let bestNum = -1;
+                for (const el of candidates) {
+                    const t = (el.textContent || '').trim();
+                    const m = t.match(/^Sketch\\s*(\\d+)/i);
+                    if (m) {
+                        const n = parseInt(m[1], 10);
+                        if (n > bestNum) { bestNum = n; best = el; }
+                    }
+                }
+                if (best) { best.click(); return true; }
+                return false;
+            }"""
+        )
+        if clicked:
+            await asyncio.sleep(0.4)
+        return bool(clicked)
+    except Exception:
+        return False
+
+
+async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Result:
+    """Extrude a sketch region. depth_mm is a number in millimetres.
+
+    Workflow:
+      1. Click the most recent sketch in the feature tree so the
+         extrude tool knows which region to use. Required when the
+         doc has more than one sketch.
+      2. Activate the extrude tool (E or toolbar).
+      3. Wait for the dialog. Find the depth input, clear it, type the
+         value with "mm" unit, press Enter.
+      4. Click the green checkmark to commit the feature.
+    """
+    # Step 1: pre-select the most recent sketch
+    await _select_latest_sketch(d)
+
+    # Step 2: activate extrude
     b = binding_for("feature.extrude")
     if b.keys:
         await d.press_chord(*b.keys)
@@ -536,17 +589,48 @@ async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Re
     else:
         return Result(False, "feature.extrude: no binding")
     await asyncio.sleep(0.5)  # dialog open animation
+
     if depth_mm is not None:
-        await d.type_text(str(depth_mm))
+        # Step 3: fill the depth input. Onshape renders the depth field
+        # as an input.os-canvas-text-edit. .fill() clears the field
+        # first, then types the value with the unit suffix so Onshape
+        # doesn't reinterpret it as the default unit (cm).
+        depth_str = f"{depth_mm:g} mm"
+        try:
+            depth_input = d.page.locator("input.os-canvas-text-edit").first
+            if await depth_input.count() > 0:
+                await depth_input.fill(depth_str)
+            else:
+                # Fallback: select all and type.
+                await d.press_chord("Control", "a")
+                await d.type_text(depth_str)
+        except Exception:
+            await d.press_chord("Control", "a")
+            await d.type_text(depth_str)
+        await asyncio.sleep(0.2)
         await d.press_key("Enter")
+        await asyncio.sleep(0.4)
+
+        # Step 4: commit with the green checkmark. Try aria-label first,
+        # fall back to the hardcoded toolbar position.
+        try:
+            check = d.page.locator(
+                'button[aria-label*="check" i], button[title*="check" i]'
+            ).first
+            if await check.count() > 0:
+                await check.click()
+            else:
+                await d.click(294.0, 105.0)
+        except Exception:
+            await d.click(294.0, 105.0)
         await asyncio.sleep(0.3)
-        # Click green checkmark to commit feature
-        await d.click(294.0, 105.0)
-        await asyncio.sleep(0.3)
+        # Some extrude paths need a second confirm. Shift+Enter
+        # dismisses any tooltip without committing the wrong action.
         await d.press_chord("Shift", "Enter")
         await asyncio.sleep(0.5)
+
     shot = await d.screenshot("feature_extrude.png")
-    r = Result(True, f"extrude depth={depth_mm}", shot)
+    r = Result(True, f"extrude depth={depth_mm}mm", shot)
     _record("feature.extrude", {"depth_mm": depth_mm}, r)
     return r
 
