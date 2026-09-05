@@ -1301,7 +1301,7 @@ async def feature_edit(d: OnshapeDriver, name: str) -> Result:
 async def features_list(d: OnshapeDriver) -> Result:
     """Return list of all features currently in the Part Studio tree."""
     try:
-        js = """() => Array.from(document.querySelectorAll('.os-list-item.ns-user-feature span.os-list-item-name, .os-list-item.ns-user-feature .os-list-item-label'))
+        js = """() => Array.from(document.querySelectorAll('.os-list-item.ns-user-feature span.os-list-item-name'))
             .map(n => n.innerText.trim())
             .filter(t => t.length > 0)"""
         names = await d.page.evaluate(js)

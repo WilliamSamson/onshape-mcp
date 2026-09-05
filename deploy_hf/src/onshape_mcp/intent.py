@@ -98,6 +98,27 @@ def parse(text: str) -> Plan | None:
     if not t:
         return None
 
+    if re.search(r"\bm\s*4\b", lower) and "screw" in lower and any(
+        word in lower for word in ("profile", "side", "revolve", "default")
+    ):
+        actions = [
+            Action("sketch.start", {"plane": "Front"}),
+            Action("sketch.rectangle", {
+                "corner1": [0.0, 0.0], "corner2": [20.0, 2.0],
+                "width": "20 mm", "height": "2 mm",
+            }),
+            Action("sketch.rectangle", {
+                "corner1": [-4.0, 0.0], "corner2": [0.0, 3.5],
+                "width": "4 mm", "height": "3.5 mm",
+            }),
+            Action("sketch.exit", {}),
+        ]
+        return Plan(
+            actions,
+            "M4×20 socket-head cap screw half-profile on Front plane "
+            "(4 mm shaft, 7 mm head diameter, 4 mm head height, 0.7 mm coarse pitch)",
+        )
+
     # Detect shape type
     is_rect = any(w in lower for w in ("box", "rectangle", "rect", "square"))
     is_circle = any(w in lower for w in ("circle", "cylinder", "disc", "disk"))

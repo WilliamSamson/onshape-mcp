@@ -155,3 +155,14 @@ class TestPlanStructure:
         assert plan is not None
         tools = [a.tool for a in plan.actions]
         assert tools == ["sketch.start", "sketch.rectangle", "sketch.exit", "feature.extrude"]
+
+
+def test_parse_default_m4_screw_profile_without_vision():
+    plan = parse("use the defaults for an M4 screw side profile for revolve")
+    assert plan is not None
+    assert [a.tool for a in plan.actions] == [
+        "sketch.start", "sketch.rectangle", "sketch.rectangle", "sketch.exit"
+    ]
+    assert plan.actions[0].args["plane"] == "Front"
+    assert plan.actions[1].args["width"] == "20 mm"
+    assert plan.actions[2].args["height"] == "3.5 mm"
