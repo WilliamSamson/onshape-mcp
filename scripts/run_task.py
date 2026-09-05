@@ -35,15 +35,18 @@ async def _clean_features(page: object) -> None:
     import re
 
     for _ in range(15):
-        loc = page.locator("span.os-list-item-name").filter(  # type: ignore[attr-defined]
-            has_text=re.compile(r"^(Sketch|Extrude)")
-        )
-        if await loc.count() == 0:
+        try:
+            loc = page.locator("span.os-list-item-name").filter(  # type: ignore[attr-defined]
+                has_text=re.compile(r"^(Sketch|Extrude)")
+            )
+            if await loc.count() == 0:
+                break
+            await loc.first.click(timeout=1500)
+            await asyncio.sleep(0.2)
+            await page.keyboard.press("Delete")  # type: ignore[attr-defined]
+            await asyncio.sleep(0.4)
+        except Exception:
             break
-        await loc.first.click()
-        await asyncio.sleep(0.2)
-        await page.keyboard.press("Delete")  # type: ignore[attr-defined]
-        await asyncio.sleep(0.4)
 
 
 async def main(

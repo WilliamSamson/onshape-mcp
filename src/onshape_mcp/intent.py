@@ -35,7 +35,6 @@ _DIM_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*(mm|cm|in|inch)?\s*(?:x|by|×)\s*(\d+(?:\.\d+)?)\s*(mm|cm|in|inch)?",
     re.IGNORECASE,
 )
-# Single dimension with mandatory unit (for squares, circles)
 _SINGLE_DIM_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*(mm|cm|in|inch)",
     re.IGNORECASE,
@@ -52,6 +51,9 @@ _DIAMETER_RE = re.compile(
 )
 _RADIUS_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*(mm|cm|in)?\s*radius", re.IGNORECASE
+)
+_POLYGON_SIDES_RE = re.compile(
+    r"(\d+)[ -]sided\b", re.IGNORECASE
 )
 _CENTERED_RE = re.compile(
     r"\b(center(?:ed)?|at\s+(?:the\s+)?origin)\b", re.IGNORECASE
@@ -99,9 +101,12 @@ def parse(text: str) -> Plan | None:
     # Detect shape type
     is_rect = any(w in lower for w in ("box", "rectangle", "rect", "square"))
     is_circle = any(w in lower for w in ("circle", "cylinder", "disc", "disk"))
+    is_polygon = any(w in lower for w in ("polygon", "hexagon", "pentagon", "octagon"))
+    is_arc = "arc" in lower and not is_circle
+    is_point = "point" in lower and not any((is_rect, is_circle, is_polygon, is_arc))
     has_extrude = "extrude" in lower
 
-    if not (is_rect or is_circle):
+    if not (is_rect or is_circle or is_polygon or is_arc or is_point):
         return None
 
     plane = _extract_plane(t)
@@ -119,7 +124,6 @@ def parse(text: str) -> Plan | None:
         if dim_m:
             w_val = float(dim_m.group(1))
             h_val = float(dim_m.group(3))
-            # Prefer unit from the first number, fall back to second
             unit = dim_m.group(2) or dim_m.group(4)
             width = _format_dim(w_val, unit)
             height = _format_dim(h_val, unit)
@@ -176,10 +180,50 @@ def parse(text: str) -> Plan | None:
             else:
                 return None
 
-    # Step 3: Exit sketch
+    elif is_polygon:
+        # Determine number of sides
+        sides = 6
+        side_m = _POLYGON_SIDES_RE.search(t)
+        if side_m:
+            sides = int(side_m.group(1))
+        elif "hexagon" in lower:
+            sides = 6
+        elif "pentagon" in lower:
+            sides = 5
+        elif "octagon" in lower:
+            sides = 8
+
+        # Determine radius
+        rad_m = _RADIUS_RE.search(t) or _SINGLE_DIM_RE.search(t)
+        radius_val = float(rad_m.group(1)) if rad_m else 50.0
+        unit = rad_m.group(2) if rad_m else "mm"
+        poly_args: dict[str, Any] = {
+            "center_x": 0.0,
+            "center_y": 0.0,
+            "radius": radius_val,
+            "sides": sides,
+        }
+        actions.append(Action("sketch.polygon", poly_args))
+        summary_parts.append(f"{sides}-sided polygon (r={_format_dim(radius_val, unit)})")
+
+    elif is_arc:
+        arc_args: dict[str, Any] = {
+            "p1_x": -50.0,
+            "p1_y": 0.0,
+            "p2_x": 50.0,
+            "p2_y": 0.0,
+        }
+        actions.append(Action("sketch.arc", arc_args))
+        summary_parts.append("3-point arc")
+
+    elif is_point:
+        actions.append(Action("sketch.point", {"x": 0.0, "y": 0.0}))
+        summary_parts.append("point at origin")
+
+    # Step: Exit sketch
     actions.append(Action("sketch.exit", {}))
 
-    # Step 4: Extrude (optional)
+    # Step: Extrude (optional)
     ext_m = _EXTRUDE_RE.search(t)
     if has_extrude and ext_m:
         depth_val = float(ext_m.group(1))

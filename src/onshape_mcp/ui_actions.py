@@ -174,40 +174,91 @@ async def sketch_start(
 
 SKETCH_COMMAND_IDS: dict[str, str] = {
     "sketch.start": "newSketch",
-    "sketch.rectangle": "RECTANGLE_TWO_CORNERS",
-    "sketch.circle": "CIRCLE_CENTER_RADIUS",
     "sketch.line": "LINESEGMENT",
+    "sketch.line_midpoint": "LINESEGMENT_MIDPOINT",
+    "sketch.rectangle": "RECTANGLE_TWO_CORNERS",
+    "sketch.rectangle_center": "RECTANGLE_CENTER_CORNER",
+    "sketch.rectangle_aligned": "ALIGNED_RECTANGLE",
+    "sketch.circle": "CIRCLE_CENTER_RADIUS",
+    "sketch.circle_3point": "CIRCLE_THREE_POINTS",
+    "sketch.ellipse": "ELLIPSE",
+    "sketch.arc": "ARC_START_END_RADIUS",
+    "sketch.arc_3point": "ARC_START_END_RADIUS",
+    "sketch.arc_tangent": "ARC_TANGENT",
+    "sketch.arc_center": "ARC_CENTER_START_END",
+    "sketch.polygon": "INSCRIBED_POLYGON",
+    "sketch.polygon_inscribed": "INSCRIBED_POLYGON",
+    "sketch.polygon_circumscribed": "CIRCUMSCRIBED_POLYGON",
+    "sketch.spline": "SPLINE",
+    "sketch.bezier": "BEZIER",
+    "sketch.point": "POINT",
+    "sketch.text": "TEXT_RECTANGLE_TWO_CORNERS",
+    "sketch.use": "USE",
+    "sketch.intersection": "INTERSECTION",
+    "sketch.construction": "TOGGLE_CONSTRUCTION",
+    "sketch.fillet": "FILLET",
+    "sketch.chamfer": "SKETCH_CHAMFER",
+    "sketch.trim": "TRIM",
+    "sketch.extend": "EXTEND",
+    "sketch.split": "SPLIT",
+    "sketch.offset": "OFFSET",
+    "sketch.slot": "SLOT",
+    "sketch.mirror": "SKETCHMIRROR",
+    "sketch.pattern_linear": "SKETCHLPATTERN",
+    "sketch.pattern_circular": "SKETCHCPATTERN",
+    "sketch.transform": "SKETCH_TRANSFORM",
     "sketch.dimension": "DIMENSION",
+    # Constraints
     "sketch.equal": "EQUAL",
-    "sketch.coincident": "COINCIDENT",
+    "constraint.coincident": "COINCIDENT",
+    "constraint.concentric": "CONCENTRIC",
+    "constraint.parallel": "PARALLEL",
+    "constraint.tangent": "TANGENT",
+    "constraint.horizontal": "HORIZONTAL",
+    "constraint.vertical": "VERTICAL",
+    "constraint.perpendicular": "PERPENDICULAR",
+    "constraint.equal": "EQUAL",
+    "constraint.midpoint": "MIDPOINT",
+    "constraint.normal": "NORMAL",
+    "constraint.pierce": "PIERCE",
+    "constraint.symmetric": "MIRROR",
+    "constraint.fix": "FIX",
+    "constraint.curvature": "CURVATURE",
+    # 3D Features
     "feature.extrude": "extrude",
     "feature.revolve": "revolve",
 }
 
 
 async def _activate_sketch_tool(d: OnshapeDriver, name: str) -> Result:
-    cmd_id = SKETCH_COMMAND_IDS.get(name)
-    if cmd_id:
-        loc = d.page.locator(f"[command-id='{cmd_id}']")
-        if await loc.count() > 0:
-            classes = await loc.first.get_attribute("class") or ""
-            if "is-active" in classes:
-                return Result(True, f"{name} already active")
-            await loc.first.click()
-            await asyncio.sleep(0.3)
-            return Result(True, f"{name} tool active (command-id: {cmd_id})")
-
+    """Activate a sketch tool via DOM command-id, keyboard shortcut, or text locator."""
+    # 1. Try keyboard shortcut first if available (fastest, most reliable)
     b = binding_for(name)
     if b.keys:
         await d.press_chord(*b.keys)
         await asyncio.sleep(0.2)
         return Result(True, f"{name} tool active (keys: {b.keys})")
+
+    # 2. Try direct DOM command-id locator
+    cmd_id = SKETCH_COMMAND_IDS.get(name)
+    if cmd_id:
+        loc = d.page.locator(f"[command-id='{cmd_id}']")
+        if await loc.count() > 0 and await loc.first.is_visible():
+            classes = await loc.first.get_attribute("class") or ""
+            if "is-active" in classes:
+                return Result(True, f"{name} already active")
+            await loc.first.click()
+            await asyncio.sleep(0.25)
+            return Result(True, f"{name} tool active (command-id: {cmd_id})")
+
+    # 3. Fall back to visible toolbar text
     if b.toolbar_text:
-        clicked = await d.click_text(b.toolbar_text, timeout_ms=3000)
+        clicked = await d.click_text(b.toolbar_text, timeout_ms=1000)
         if clicked:
-            await asyncio.sleep(0.15)
-            return Result(True, f"{name} tool active")
-    return Result(False, f"{name}: no binding available")
+            await asyncio.sleep(0.2)
+            return Result(True, f"{name} tool active (text: {b.toolbar_text})")
+
+    return Result(False, f"{name}: no binding or visible tool button available")
 
 
 def _parse_dim_px(val: float | str | None, default_px: float = 120.0) -> float:
@@ -487,6 +538,392 @@ async def sketch_equal(d: OnshapeDriver, *entity_xys: tuple[float, float]) -> Re
     shot = await d.screenshot("sketch_equal.png")
     r = Result(True, f"equal across {len(entity_xys)} entities", shot)
     _record("sketch.equal", {"entities": [list(xy) for xy in entity_xys]}, r)
+    return r
+
+
+async def sketch_arc(
+    d: OnshapeDriver,
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    radius_pt: tuple[float, float] | None = None,
+) -> Result:
+    """Create a 3-point arc from p1 to p2 passing through radius_pt."""
+    t = await _activate_sketch_tool(d, "sketch.arc")
+    if not t.ok:
+        return t
+    pt1 = await _ensure_viewport_coords(d, p1)
+    pt2 = await _ensure_viewport_coords(d, p2)
+    if radius_pt is not None:
+        pt3 = await _ensure_viewport_coords(d, radius_pt)
+    else:
+        # Default arc bulge perpendicular to chord
+        mx, my = (pt1[0] + pt2[0]) / 2.0, (pt1[1] + pt2[1]) / 2.0
+        pt3 = (mx, my - 30.0)
+    await d.click(*pt1)
+    await asyncio.sleep(0.1)
+    await d.click(*pt2)
+    await asyncio.sleep(0.1)
+    await d.click(*pt3)
+    await asyncio.sleep(0.1)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_arc.png")
+    r = Result(True, f"arc {pt1} -> {pt2} through {pt3}", shot)
+    _record("sketch.arc", {"p1": list(pt1), "p2": list(pt2), "radius_pt": list(pt3)}, r)
+    return r
+
+
+async def sketch_polygon(
+    d: OnshapeDriver,
+    center: tuple[float, float] | None = None,
+    radius: float = 60.0,
+    sides: int = 6,
+    circumscribed: bool = False,
+) -> Result:
+    """Draw an inscribed or circumscribed polygon."""
+    tool_name = "sketch.polygon_circumscribed" if circumscribed else "sketch.polygon_inscribed"
+    t = await _activate_sketch_tool(d, tool_name)
+    if not t.ok:
+        t = await _activate_sketch_tool(d, "sketch.polygon")
+    if not t.ok:
+        return t
+    cx, cy = await get_canvas_origin(d)
+    c = await _ensure_viewport_coords(d, center) if center is not None else (cx, cy)
+    r_px = _parse_dim_px(radius, default_px=60.0)
+    await d.click(*c)
+    await asyncio.sleep(0.15)
+    await d.click(c[0] + r_px, c[1])
+    await asyncio.sleep(0.2)
+    # Type number of sides
+    await d.type_text(str(int(sides)))
+    await asyncio.sleep(0.1)
+    await d.press_key("Enter")
+    await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_polygon.png")
+    r = Result(True, f"{sides}-sided polygon at {c} r={r_px}", shot)
+    _record("sketch.polygon", {"center": list(c), "radius": r_px, "sides": sides}, r)
+    return r
+
+
+async def sketch_spline(d: OnshapeDriver, points: list[tuple[float, float]]) -> Result:
+    """Draw a spline passing through a sequence of points."""
+    if len(points) < 2:
+        return Result(False, "sketch.spline requires at least 2 points")
+    t = await _activate_sketch_tool(d, "sketch.spline")
+    if not t.ok:
+        return t
+    pts = [await _ensure_viewport_coords(d, p) for p in points]
+    for pt in pts:
+        await d.click(*pt)
+        await asyncio.sleep(0.15)
+    await d.double_click(*pts[-1])
+    await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_spline.png")
+    r = Result(True, f"spline through {len(pts)} points", shot)
+    _record("sketch.spline", {"points": [list(p) for p in pts]}, r)
+    return r
+
+
+async def sketch_point(d: OnshapeDriver, pt: tuple[float, float]) -> Result:
+    """Place a single sketch point at coordinate pt."""
+    t = await _activate_sketch_tool(d, "sketch.point")
+    if not t.ok:
+        return t
+    p = await _ensure_viewport_coords(d, pt)
+    await d.click(*p)
+    await asyncio.sleep(0.1)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_point.png")
+    r = Result(True, f"point at {p}", shot)
+    _record("sketch.point", {"pt": list(p)}, r)
+    return r
+
+
+async def sketch_text(
+    d: OnshapeDriver,
+    corner1: tuple[float, float],
+    corner2: tuple[float, float],
+    text: str,
+) -> Result:
+    """Draw a text box from corner1 to corner2 and enter text."""
+    t = await _activate_sketch_tool(d, "sketch.text")
+    if not t.ok:
+        return t
+    c1 = await _ensure_viewport_coords(d, corner1)
+    c2 = await _ensure_viewport_coords(d, corner2)
+    await d.click(*c1)
+    await asyncio.sleep(0.1)
+    await d.click(*c2)
+    await asyncio.sleep(0.3)
+    # Fill in the text in the dialog
+    textarea = d.page.locator("textarea.os-text-editor-input, textarea")
+    if await textarea.count() > 0:
+        await textarea.first.fill(text)
+        await asyncio.sleep(0.1)
+        ok_btn = d.page.locator(".ns-dialog-button-ok, .button-ok").first
+        if await ok_btn.count() > 0:
+            await ok_btn.click()
+        else:
+            await d.press_key("Enter")
+    else:
+        await d.type_text(text)
+        await d.press_key("Enter")
+    await asyncio.sleep(0.3)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_text.png")
+    r = Result(True, f"text '{text}' at {c1}->{c2}", shot)
+    _record("sketch.text", {"corner1": list(c1), "corner2": list(c2), "text": text}, r)
+    return r
+
+
+async def sketch_use(d: OnshapeDriver, pt: tuple[float, float]) -> Result:
+    """Project existing 3D model geometry or sketch curve at pt onto sketch plane."""
+    t = await _activate_sketch_tool(d, "sketch.use")
+    if not t.ok:
+        return t
+    p = await _ensure_viewport_coords(d, pt)
+    await d.click(*p)
+    await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_use.png")
+    r = Result(True, f"projected geometry at {p}", shot)
+    _record("sketch.use", {"pt": list(p)}, r)
+    return r
+
+
+async def sketch_construction(d: OnshapeDriver, pt: tuple[float, float] | None = None) -> Result:
+    """Toggle construction mode or convert entity at pt to construction geometry ('q')."""
+    if pt is not None:
+        p = await _ensure_viewport_coords(d, pt)
+        await d.click(*p)
+        await asyncio.sleep(0.15)
+        await d.press_chord("q")
+        await asyncio.sleep(0.15)
+        await d.press_key("Escape")
+        shot = await d.screenshot("sketch_construction.png")
+        r = Result(True, f"converted entity at {p} to construction", shot)
+        _record("sketch.construction", {"pt": list(p)}, r)
+        return r
+    await d.press_chord("q")
+    await asyncio.sleep(0.15)
+    shot = await d.screenshot("sketch_construction.png")
+    r = Result(True, "toggled construction mode", shot)
+    _record("sketch.construction", {}, r)
+    return r
+
+
+async def sketch_fillet(
+    d: OnshapeDriver,
+    vertex_xy: tuple[float, float],
+    radius_mm: float | str = 5.0,
+) -> Result:
+    """Create a 2D sketch fillet at vertex_xy with radius_mm."""
+    t = await _activate_sketch_tool(d, "sketch.fillet")
+    if not t.ok:
+        return t
+    v = await _ensure_viewport_coords(d, vertex_xy)
+    await d.click(*v)
+    await asyncio.sleep(0.3)
+    val_str = f"{radius_mm} mm" if isinstance(radius_mm, (int, float)) else str(radius_mm)
+    dim_input = d.page.locator("input.os-canvas-text-edit")
+    if await dim_input.count() > 0:
+        await dim_input.first.fill(val_str)
+        await asyncio.sleep(0.1)
+        await d.press_key("Enter")
+    else:
+        await d.type_text(val_str)
+        await d.press_key("Enter")
+    await asyncio.sleep(0.3)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_fillet.png")
+    r = Result(True, f"fillet {val_str} at {v}", shot)
+    _record("sketch.fillet", {"vertex": list(v), "radius": val_str}, r)
+    return r
+
+
+async def sketch_chamfer(
+    d: OnshapeDriver,
+    vertex_xy: tuple[float, float],
+    distance_mm: float | str = 5.0,
+) -> Result:
+    """Create a 2D sketch chamfer at vertex_xy with distance_mm."""
+    t = await _activate_sketch_tool(d, "sketch.chamfer")
+    if not t.ok:
+        return t
+    v = await _ensure_viewport_coords(d, vertex_xy)
+    await d.click(*v)
+    await asyncio.sleep(0.3)
+    val_str = f"{distance_mm} mm" if isinstance(distance_mm, (int, float)) else str(distance_mm)
+    dim_input = d.page.locator("input.os-canvas-text-edit")
+    if await dim_input.count() > 0:
+        await dim_input.first.fill(val_str)
+        await asyncio.sleep(0.1)
+        await d.press_key("Enter")
+    else:
+        await d.type_text(val_str)
+        await d.press_key("Enter")
+    await asyncio.sleep(0.3)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_chamfer.png")
+    r = Result(True, f"chamfer {val_str} at {v}", shot)
+    _record("sketch.chamfer", {"vertex": list(v), "distance": val_str}, r)
+    return r
+
+
+async def sketch_trim(d: OnshapeDriver, entity_xy: tuple[float, float]) -> Result:
+    """Trim a sketch curve back to intersections by clicking it."""
+    t = await _activate_sketch_tool(d, "sketch.trim")
+    if not t.ok:
+        return t
+    p = await _ensure_viewport_coords(d, entity_xy)
+    await d.click(*p)
+    await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_trim.png")
+    r = Result(True, f"trimmed at {p}", shot)
+    _record("sketch.trim", {"entity": list(p)}, r)
+    return r
+
+
+async def sketch_extend(d: OnshapeDriver, endpoint_xy: tuple[float, float]) -> Result:
+    """Extend a sketch curve to boundary by clicking its endpoint."""
+    t = await _activate_sketch_tool(d, "sketch.extend")
+    if not t.ok:
+        return t
+    p = await _ensure_viewport_coords(d, endpoint_xy)
+    await d.click(*p)
+    await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_extend.png")
+    r = Result(True, f"extended at {p}", shot)
+    _record("sketch.extend", {"endpoint": list(p)}, r)
+    return r
+
+
+async def sketch_split(d: OnshapeDriver, entity_xy: tuple[float, float]) -> Result:
+    """Split a sketch curve at coordinate."""
+    t = await _activate_sketch_tool(d, "sketch.split")
+    if not t.ok:
+        return t
+    p = await _ensure_viewport_coords(d, entity_xy)
+    await d.click(*p)
+    await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_split.png")
+    r = Result(True, f"split at {p}", shot)
+    _record("sketch.split", {"entity": list(p)}, r)
+    return r
+
+
+async def sketch_offset(
+    d: OnshapeDriver,
+    entity_xy: tuple[float, float],
+    distance_mm: float | str = 5.0,
+    side_xy: tuple[float, float] | None = None,
+) -> Result:
+    """Offset selected curve by distance_mm."""
+    t = await _activate_sketch_tool(d, "sketch.offset")
+    if not t.ok:
+        return t
+    p = await _ensure_viewport_coords(d, entity_xy)
+    await d.click(*p)
+    await asyncio.sleep(0.2)
+    if side_xy is not None:
+        s = await _ensure_viewport_coords(d, side_xy)
+        await d.click(*s)
+    else:
+        await d.click(p[0] + 20.0, p[1] + 20.0)
+    await asyncio.sleep(0.2)
+    val_str = f"{distance_mm} mm" if isinstance(distance_mm, (int, float)) else str(distance_mm)
+    dim_input = d.page.locator("input.os-canvas-text-edit")
+    if await dim_input.count() > 0:
+        await dim_input.first.fill(val_str)
+        await asyncio.sleep(0.1)
+        await d.press_key("Enter")
+    else:
+        await d.type_text(val_str)
+        await d.press_key("Enter")
+    await asyncio.sleep(0.3)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_offset.png")
+    r = Result(True, f"offset {val_str} at {p}", shot)
+    _record("sketch.offset", {"entity": list(p), "distance": val_str}, r)
+    return r
+
+
+async def sketch_slot(
+    d: OnshapeDriver,
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    radius_px: float = 20.0,
+) -> Result:
+    """Create a sketch slot along line from p1 to p2."""
+    t = await _activate_sketch_tool(d, "sketch.slot")
+    if not t.ok:
+        return t
+    pt1 = await _ensure_viewport_coords(d, p1)
+    pt2 = await _ensure_viewport_coords(d, p2)
+    await d.click(*pt1)
+    await asyncio.sleep(0.1)
+    await d.click(*pt2)
+    await asyncio.sleep(0.1)
+    await d.click(pt2[0] + radius_px, pt2[1])
+    await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_slot.png")
+    r = Result(True, f"slot {pt1} -> {pt2}", shot)
+    _record("sketch.slot", {"p1": list(pt1), "p2": list(pt2)}, r)
+    return r
+
+
+async def sketch_mirror(
+    d: OnshapeDriver,
+    centerline_xy: tuple[float, float],
+    *entity_xys: tuple[float, float],
+) -> Result:
+    """Mirror entities across a centerline."""
+    if not entity_xys:
+        return Result(False, "sketch.mirror requires at least 1 entity to mirror")
+    t = await _activate_sketch_tool(d, "sketch.mirror")
+    if not t.ok:
+        return t
+    cl = await _ensure_viewport_coords(d, centerline_xy)
+    await d.click(*cl)
+    await asyncio.sleep(0.3)
+    for xy in entity_xys:
+        e = await _ensure_viewport_coords(d, xy)
+        await d.click(*e)
+        await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot("sketch_mirror.png")
+    r = Result(True, f"mirrored {len(entity_xys)} entities across {cl}", shot)
+    _record("sketch.mirror", {"centerline": list(cl), "entities": [list(e) for e in entity_xys]}, r)
+    return r
+
+
+async def sketch_constrain(
+    d: OnshapeDriver,
+    constraint_type: str,
+    *entity_xys: tuple[float, float],
+) -> Result:
+    """Apply any geometric constraint across selected entities."""
+    c_type = constraint_type.lower().replace("constraint.", "").strip()
+    tool_key = f"constraint.{c_type}"
+    t = await _activate_sketch_tool(d, tool_key)
+    if not t.ok:
+        return t
+    await asyncio.sleep(0.2)
+    for xy in entity_xys:
+        pt = await _ensure_viewport_coords(d, xy)
+        await d.page.mouse.move(*pt)
+        await asyncio.sleep(0.1)
+        await d.page.mouse.click(*pt)
+        await asyncio.sleep(0.2)
+    await d.press_key("Escape")
+    shot = await d.screenshot(f"constraint_{c_type}.png")
+    r = Result(True, f"constraint {c_type} on {len(entity_xys)} entities", shot)
+    _record(tool_key, {"entities": [list(e) for e in entity_xys]}, r)
     return r
 
 

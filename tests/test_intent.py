@@ -115,6 +115,33 @@ class TestFallback:
         assert parse("I need help with my project") is None
 
 
+class TestPolygon:
+    def test_hexagon(self):
+        plan = parse("draw a 6-sided polygon on the top plane")
+        assert plan is not None
+        assert plan.actions[1].tool == "sketch.polygon"
+        assert plan.actions[1].args["sides"] == 6
+
+    def test_octagon_extrude(self):
+        plan = parse("draw an 8-sided polygon with 30mm radius on the front plane and extrude it 10mm")
+        assert plan is not None
+        assert plan.actions[1].args["sides"] == 8
+        assert plan.actions[3].tool == "feature.extrude"
+        assert plan.actions[3].args["depth_mm"] == 10.0
+
+
+class TestArcAndPoint:
+    def test_arc(self):
+        plan = parse("draw a 3-point arc on the top plane")
+        assert plan is not None
+        assert plan.actions[1].tool == "sketch.arc"
+
+    def test_point(self):
+        plan = parse("draw a point at the origin on the top plane")
+        assert plan is not None
+        assert plan.actions[1].tool == "sketch.point"
+
+
 class TestPlanStructure:
     def test_summary_includes_dimensions(self):
         plan = parse("draw a 10cm by 5cm box on the front plane")

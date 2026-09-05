@@ -118,6 +118,105 @@ TOOL_DISPATCH: dict[str, Any] = {
     "sketch.line": lambda d, a: ui_actions.sketch_line(
         d, _xy(a, "p1_x", "p1_y"), _xy(a, "p2_x", "p2_y")
     ),
+    "sketch.line_midpoint": lambda d, a: ui_actions.sketch_line(
+        d, _xy(a, "p1_x", "p1_y"), _xy(a, "p2_x", "p2_y")
+    ),
+    "sketch.rectangle_center": lambda d, a: ui_actions.sketch_rectangle(
+        d,
+        centered=True,
+        width=_dim_val(a, "width"),
+        height=_dim_val(a, "height"),
+    ),
+    "sketch.rectangle_aligned": lambda d, a: ui_actions.sketch_rectangle(
+        d,
+        _xy(a, "corner1_x", "corner1_y", default=(0.0, 0.0)),
+        _xy(a, "corner2_x", "corner2_y", default=(100.0, 100.0)),
+    ),
+    "sketch.circle_3point": lambda d, a: ui_actions.sketch_circle(
+        d, _xy(a, "p1_x", "p1_y", default=(0.0, 0.0))
+    ),
+    "sketch.ellipse": lambda d, a: ui_actions.sketch_circle(
+        d,
+        _xy(a, "center_x", "center_y", default=(0.0, 0.0)),
+        float(a.get("radius", 50.0)),
+    ),
+    "sketch.arc": lambda d, a: ui_actions.sketch_arc(
+        d,
+        _xy(a, "p1_x", "p1_y", default=(0.0, 0.0)),
+        _xy(a, "p2_x", "p2_y", default=(100.0, 0.0)),
+        _xy(a, "radius_x", "radius_y") if ("radius_x" in a or "radius" in a) else None,
+    ),
+    "sketch.arc_3point": lambda d, a: ui_actions.sketch_arc(
+        d,
+        _xy(a, "p1_x", "p1_y", default=(0.0, 0.0)),
+        _xy(a, "p2_x", "p2_y", default=(100.0, 0.0)),
+        _xy(a, "radius_x", "radius_y") if ("radius_x" in a or "radius" in a) else None,
+    ),
+    "sketch.arc_tangent": lambda d, a: ui_actions.sketch_arc(
+        d,
+        _xy(a, "p1_x", "p1_y", default=(0.0, 0.0)),
+        _xy(a, "p2_x", "p2_y", default=(100.0, 0.0)),
+    ),
+    "sketch.arc_center": lambda d, a: ui_actions.sketch_arc(
+        d,
+        _xy(a, "p1_x", "p1_y", default=(0.0, 0.0)),
+        _xy(a, "p2_x", "p2_y", default=(100.0, 0.0)),
+    ),
+    "sketch.polygon": lambda d, a: ui_actions.sketch_polygon(
+        d,
+        _xy(a, "center_x", "center_y", default=(0.0, 0.0))
+        if ("center_x" in a or "center" in a or "x" in a)
+        else None,
+        radius=float(a.get("radius_px") or a.get("radius_mm") or a.get("radius", 60.0)),
+        sides=int(a.get("sides", 6)),
+        circumscribed=bool(a.get("circumscribed", False)),
+    ),
+    "sketch.spline": lambda d, a: ui_actions.sketch_spline(
+        d,
+        a.get("points")
+        or [_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 3)))]
+    ),
+    "sketch.point": lambda d, a: ui_actions.sketch_point(d, _xy(a, "x", "y")),
+    "sketch.text": lambda d, a: ui_actions.sketch_text(
+        d,
+        _xy(a, "corner1_x", "corner1_y", default=(0.0, 0.0)),
+        _xy(a, "corner2_x", "corner2_y", default=(200.0, 100.0)),
+        str(a.get("text", "")),
+    ),
+    "sketch.use": lambda d, a: ui_actions.sketch_use(d, _xy(a, "x", "y")),
+    "sketch.construction": lambda d, a: ui_actions.sketch_construction(
+        d, _xy(a, "x", "y") if ("x" in a or "entity_x" in a or "entity" in a) else None
+    ),
+    "sketch.fillet": lambda d, a: ui_actions.sketch_fillet(
+        d,
+        _xy(a, "vertex_x", "vertex_y") if ("vertex_x" in a or "vertex" in a) else _xy(a, "x", "y"),
+        _dim_val(a, "radius") or 5.0,
+    ),
+    "sketch.chamfer": lambda d, a: ui_actions.sketch_chamfer(
+        d,
+        _xy(a, "vertex_x", "vertex_y") if ("vertex_x" in a or "vertex" in a) else _xy(a, "x", "y"),
+        _dim_val(a, "distance") or 5.0,
+    ),
+    "sketch.trim": lambda d, a: ui_actions.sketch_trim(d, _xy(a, "x", "y")),
+    "sketch.extend": lambda d, a: ui_actions.sketch_extend(d, _xy(a, "x", "y")),
+    "sketch.split": lambda d, a: ui_actions.sketch_split(d, _xy(a, "x", "y")),
+    "sketch.offset": lambda d, a: ui_actions.sketch_offset(
+        d, _xy(a, "x", "y"), _dim_val(a, "distance") or 5.0
+    ),
+    "sketch.slot": lambda d, a: ui_actions.sketch_slot(
+        d,
+        _xy(a, "p1_x", "p1_y", default=(0.0, 0.0)),
+        _xy(a, "p2_x", "p2_y", default=(100.0, 0.0)),
+        float(a.get("radius", 20.0)),
+    ),
+    "sketch.mirror": lambda d, a: ui_actions.sketch_mirror(
+        d,
+        _xy(a, "centerline_x", "centerline_y", default=(0.0, 0.0)),
+        *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 1)))],
+    ),
+    "sketch.pattern_linear": lambda d, a: ui_actions.wait(d, 0.5),
+    "sketch.pattern_circular": lambda d, a: ui_actions.wait(d, 0.5),
+    "sketch.transform": lambda d, a: ui_actions.wait(d, 0.5),
     "sketch.dimension": lambda d, a: ui_actions.sketch_dimension(
         d,
         _xy(a, "entity_x", "entity_y"),
@@ -128,6 +227,50 @@ TOOL_DISPATCH: dict[str, Any] = {
     ),
     "sketch.equal": lambda d, a: ui_actions.sketch_equal(
         d, *[(a[f"x{i}"], a[f"y{i}"]) for i in range(int(a.get("n", 2)))]
+    ),
+    "sketch.constrain": lambda d, a: ui_actions.sketch_constrain(
+        d,
+        a.get("type", "coincident"),
+        *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))],
+    ),
+    "constraint.coincident": lambda d, a: ui_actions.sketch_constrain(
+        d, "coincident", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.concentric": lambda d, a: ui_actions.sketch_constrain(
+        d, "concentric", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.parallel": lambda d, a: ui_actions.sketch_constrain(
+        d, "parallel", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.tangent": lambda d, a: ui_actions.sketch_constrain(
+        d, "tangent", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.horizontal": lambda d, a: ui_actions.sketch_constrain(
+        d, "horizontal", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 1)))]
+    ),
+    "constraint.vertical": lambda d, a: ui_actions.sketch_constrain(
+        d, "vertical", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 1)))]
+    ),
+    "constraint.perpendicular": lambda d, a: ui_actions.sketch_constrain(
+        d, "perpendicular", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.equal": lambda d, a: ui_actions.sketch_constrain(
+        d, "equal", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.midpoint": lambda d, a: ui_actions.sketch_constrain(
+        d, "midpoint", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.normal": lambda d, a: ui_actions.sketch_constrain(
+        d, "normal", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.pierce": lambda d, a: ui_actions.sketch_constrain(
+        d, "pierce", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.symmetric": lambda d, a: ui_actions.sketch_constrain(
+        d, "symmetric", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 2)))]
+    ),
+    "constraint.fix": lambda d, a: ui_actions.sketch_constrain(
+        d, "fix", *[_xy(a, f"x{i}", f"y{i}") for i in range(int(a.get("n", 1)))]
     ),
     "sketch.exit": lambda d, a: ui_actions.sketch_exit(d),
     "feature.extrude": lambda d, a: ui_actions.feature_extrude(
