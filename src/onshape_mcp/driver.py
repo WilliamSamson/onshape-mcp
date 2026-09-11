@@ -21,6 +21,7 @@ import sys
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,12 @@ from playwright.async_api import BrowserContext, Locator, Page, async_playwright
 from .config import settings
 
 ONSHAPE_URL = "https://cad.onshape.com"
+
+
+def _drop_expired(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep session cookies (no expiry) and any that haven't lapsed."""
+    now = time.time()
+    return [c for c in cookies if not c.get("expires") or float(c["expires"]) > now]
 
 
 class OnshapeDriver:
@@ -170,10 +177,21 @@ class OnshapeDriver:
                 except Exception as e:
                     print(f"[driver] failed parsing cookies from env: {e}", file=sys.stderr)
 
-        # 2. Local cookie file
+        # 2. Local cookie file. Expired entries are dropped rather than
+        # injected: a stale file used to shadow a perfectly good browser
+        # session forever, because step 3 only ran when `raw` was empty.
+        # The symptom was "redirected to signin, log in to Chrome" while
+        # Chrome was in fact logged in.
         if not raw and self.cookie_file.exists():
             try:
-                raw = json.loads(self.cookie_file.read_text(encoding="utf-8"))
+                stored = json.loads(self.cookie_file.read_text(encoding="utf-8"))
+                raw = _drop_expired(stored)
+                if stored and not raw:
+                    print(
+                        f"[driver] every cookie in {self.cookie_file.name} has expired; "
+                        "re-syncing from your browser",
+                        file=sys.stderr,
+                    )
             except (json.JSONDecodeError, OSError) as e:
                 print(f"[driver] cookie file unreadable ({e}); ignoring", file=sys.stderr)
 
@@ -197,6 +215,7 @@ class OnshapeDriver:
                         continue
                     try:
                         cj = loader(domain_name="onshape.com")
+                        found = []
                         for c in cj:
                             cookie = {
                                 "name": c.name,
@@ -211,7 +230,8 @@ class OnshapeDriver:
                             }
                             if c.expires:
                                 cookie["expires"] = float(c.expires)
-                            raw.append(cookie)
+                            found.append(cookie)
+                        raw = _drop_expired(found)
                         if raw:
                             self.cookie_file.parent.mkdir(parents=True, exist_ok=True)
                             self.cookie_file.write_text(json.dumps(raw, indent=2), encoding="utf-8")
@@ -263,8 +283,15 @@ class OnshapeDriver:
         await self.wait_for_app()
         if "signin" in self.page.url:
             raise RuntimeError(
-                "Onshape redirected to signin page. Cookies may be invalid or expired. "
-                "Please log in to cad.onshape.com in Google Chrome."
+                "Onshape redirected to its signin page — the saved session is no longer "
+                "valid.\n"
+                "Onshape's session cookies (on-session-id, x-www-session) are httpOnly "
+                "and expire server-side, so they can look present and unexpired while "
+                "being dead.\n"
+                "Fix it with:\n"
+                "    onshape-mcp login\n"
+                "which opens a real browser, waits for you to sign in, and writes fresh "
+                f"cookies to {self.cookie_file}."
             )
 
     # Screenshots
