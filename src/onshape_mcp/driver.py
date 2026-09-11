@@ -191,25 +191,15 @@ class OnshapeDriver:
                 except Exception as e:
                     print(f"[driver] failed parsing cookies from env: {e}", file=sys.stderr)
 
-        # 2. Local cookie file. Expired entries are dropped rather than
-        # injected: a stale file used to shadow a perfectly good browser
-        # session forever, because step 3 only ran when `raw` was empty.
-        # The symptom was "redirected to signin, log in to Chrome" while
-        # Chrome was in fact logged in.
-        if not raw and self.cookie_file.exists():
-            try:
-                stored = json.loads(self.cookie_file.read_text(encoding="utf-8"))
-                raw = _drop_expired(stored)
-                if stored and not raw:
-                    print(
-                        f"[driver] every cookie in {self.cookie_file.name} has expired; "
-                        "re-syncing from your browser",
-                        file=sys.stderr,
-                    )
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"[driver] cookie file unreadable ({e}); ignoring", file=sys.stderr)
-
-        # 3. Auto-extract from available installed browsers
+        # 2. Your installed browser, checked BEFORE the saved file.
+        #
+        # Onshape's session cookies (on-session-id, on, XSRF-TOKEN) have no
+        # expiry — they are session cookies that Onshape revokes server-side.
+        # A saved file therefore looks permanently valid while being dead,
+        # and when it was consulted first it shadowed a browser that was
+        # logged in the whole time. Whatever you are signed into right now
+        # is the truth; the file is only a fallback for machines with no
+        # browser (servers, containers).
         if not raw:
             try:
                 import browser_cookie3
@@ -256,12 +246,20 @@ class OnshapeDriver:
                     except Exception:
                         continue
             except Exception as e:
-                print(f"[driver] could not extract Onshape cookies from local browsers: {e}", file=sys.stderr)
+                print(f"[driver] could not read cookies from local browsers: {e}", file=sys.stderr)
+
+        # 3. Saved file — only when no browser could be read.
+        if not raw and self.cookie_file.exists():
+            try:
+                raw = _drop_expired(json.loads(self.cookie_file.read_text(encoding="utf-8")))
+                print(f"[driver] using saved cookies from {self.cookie_file.name}", file=sys.stderr)
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"[driver] cookie file unreadable ({e}); ignoring", file=sys.stderr)
+
         if not raw:
             return
         # Playwright's add_cookies wants the same shape it returns.
         await self._ctx.add_cookies(raw)
-        print(f"[driver] loaded {len(raw)} cookies from {self.cookie_file.name}", file=sys.stderr)
 
     async def save_cookies(self) -> int:
         """Dump current context cookies to self.cookie_file. Returns count."""
