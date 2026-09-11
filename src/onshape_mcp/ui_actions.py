@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -1201,12 +1202,39 @@ async def sketch_create(
       - {"type": "arc", "p1": [0, 0], "p2": [20, 20], "radius_mm": 15}
       - {"type": "point", "x": 0, "y": 0}
     """
+    shapes = shapes or []
+
+    # Build the geometry directly whenever we can express it. Drawing on
+    # the canvas cannot size anything below the minimum clickable shape —
+    # a 9.5mm circle was stored as 24.9mm — so exact is the default and
+    # the canvas is the fallback. Every caller (act, the intent fast path,
+    # dispatch, the MCP tool) routes through here, so none of them has to
+    # know which one ran.
+    try:
+        from .onshape_api import create_exact_sketch
+
+        exact = await create_exact_sketch(d, plane=plane, shapes=shapes, name=name or "Sketch")
+        shot = await d.screenshot("sketch_create.png")
+        r = Result(
+            bool(exact.get("ok")),
+            f"Created sketch '{exact.get('name')}' on {plane} — geometry measured back from "
+            f"Onshape and {'matches' if exact.get('ok') else 'DOES NOT match'} the request",
+            shot,
+            {"method": "exact", **exact},
+        )
+        _record("sketch.create", {"plane": plane, "shapes_count": len(shapes)}, r)
+        return r
+    except ValueError:
+        # A shape the exact builder has no geometry for (arc, point, text).
+        pass
+    except Exception as e:
+        print(f"[sketch] exact path unavailable ({e}); drawing on the canvas", file=sys.stderr)
+
     start_res = await sketch_start(d, plane=plane)
     if not start_res.ok:
         return start_res
 
     created_shapes: list[dict[str, Any]] = []
-    shapes = shapes or []
     for s in shapes:
         stype = str(s.get("type", "")).lower().strip()
         if stype in ("rectangle", "box", "square"):
