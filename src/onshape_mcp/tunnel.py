@@ -8,6 +8,7 @@ Allows web AIs (ChatGPT Web, LibreChat, Open WebUI) to connect instantly.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import shutil
@@ -102,6 +103,19 @@ def require_token(app: Any, token: str) -> Any:
     return gated
 
 
+def _stable_subdomain() -> str:
+    """Requested localtunnel hostname. Best-effort only — see below."""
+    return os.environ.get("ONSHAPE_TUNNEL_SUBDOMAIN", "").strip()
+
+
+def _ngrok_domain() -> str:
+    """Reserved ngrok domain. Unlike localtunnel subdomains this is
+    guaranteed: the domain is bound to your account, so the URL is
+    genuinely the same every run. Free tier includes one.
+    """
+    return os.environ.get("ONSHAPE_NGROK_DOMAIN", "").strip()
+
+
 def serve_sse(host: str, port: int, token: str, streamable: bool = True) -> None:
     """Serve MCP behind a shared-secret check.
 
@@ -115,20 +129,37 @@ def serve_sse(host: str, port: int, token: str, streamable: bool = True) -> None
     import uvicorn
 
     from .server import mcp
+    from . import selfupdate  # noqa: F401  — registers the version/update tools
 
     app = mcp.streamable_http_app() if streamable else mcp.sse_app()
     uvicorn.run(require_token(app, token), host=host, port=port, log_level="info")
 
 
 def find_tunnel_binary() -> tuple[str, list[str]] | None:
-    """Find available tunnel tool (cloudflared or localtunnel)."""
-    # 1. Cloudflare tunnel (no sign-up, fast, reliable)
+    """Pick a tunnel tool.
+
+    localtunnel wins when a stable subdomain is requested, because it is
+    the only free option here that can hand back the SAME hostname every
+    run. Cloudflare Quick Tunnels always mint a random one, which meant
+    re-pasting the URL into ChatGPT after every restart.
+    """
+    # ngrok first when a reserved domain is configured: it is the only
+    # option here that actually guarantees the hostname. localtunnel
+    # treats --subdomain as a request and silently hands back a random
+    # name when it is taken, which is indistinguishable from working
+    # until the connector breaks.
+    ng = shutil.which("ngrok")
+    if _ngrok_domain() and ng:
+        return ("ngrok", [ng, "http", f"--url=https://{_ngrok_domain()}"])
+
+    npx = shutil.which("npx")
+    if _stable_subdomain() and npx:
+        return ("localtunnel", [npx, "-y", "localtunnel", "--port"])
+
     cf = shutil.which("cloudflared")
     if cf:
         return ("cloudflared", [cf, "tunnel", "--url"])
 
-    # 2. Localtunnel via npx
-    npx = shutil.which("npx")
     if npx:
         return ("localtunnel", [npx, "-y", "localtunnel", "--port"])
 
@@ -192,8 +223,12 @@ def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
     # Start the tunnel process in the background
     if tunnel_type == "cloudflared":
         cmd = [*tunnel_cmd, local_url]
+    elif tunnel_type == "ngrok":
+        cmd = [*tunnel_cmd, str(port), "--log=stdout"]
     else:
         cmd = [*tunnel_cmd, str(port)]
+        if _stable_subdomain():
+            cmd += ["--subdomain", _stable_subdomain()]
 
     tunnel_proc = subprocess.Popen(
         cmd,
@@ -219,6 +254,10 @@ def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
                 public_url = m_cf.group(0)
                 break
             # Localtunnel pattern
+            m_ng = re.search(r"https://[a-zA-Z0-9.-]+\.ngrok(?:-free)?\.(?:app|dev|io)", line)
+            if m_ng:
+                public_url = m_ng.group(0)
+                break
             m_lt = re.search(r"https://[a-zA-Z0-9-]+\.loca\.lt", line)
             if m_lt:
                 public_url = m_lt.group(0)
@@ -244,10 +283,25 @@ def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
             print("Token: pinned from MCP_TOKEN in .env (stable across restarts).")
         else:
             print("Token: freshly minted — set MCP_TOKEN in .env to keep it stable.")
-        print("Hostname: trycloudflare gives a NEW random hostname every run, so")
-        print("you must re-paste this URL into ChatGPT after each restart. Run")
-        print("`cloudflared tunnel --name <name>` with a Cloudflare-hosted domain")
-        print("if you want one permanent URL.\n")
+        want = _ngrok_domain() or _stable_subdomain()
+        host_only = public_url.split("//")[-1]
+        granted = host_only if _ngrok_domain() else host_only.split(".")[0]
+        if want and granted == want:
+            print(f"Hostname: PERMANENT ({want}). Paste this URL into ChatGPT once —")
+            print("it survives restarts, so the connector keeps working and")
+            print("onshape_mcp_update(restart=True) can update in place.\n")
+        elif want:
+            # Never claim permanence we did not get. localtunnel hands out
+            # a random name when the requested subdomain is already taken,
+            # and a URL that silently changed is the whole problem here.
+            print(f"Hostname: NOT PERMANENT — asked for '{want}', got '{granted}'.")
+            print("That subdomain is taken (possibly by your own earlier run — check")
+            print("for a stray localtunnel process). Pick another name in")
+            print("ONSHAPE_TUNNEL_SUBDOMAIN, or re-paste this URL for now.\n")
+        else:
+            print("Hostname: NEW random hostname every run, so you must re-paste this")
+            print("URL into ChatGPT after each restart. Set ONSHAPE_TUNNEL_SUBDOMAIN")
+            print("in .env for a permanent one.\n")
         print("1. ChatGPT: Settings > Connectors > Add, paste the full URL.")
         print("2. LibreChat / Open WebUI: add it under MCP servers.")
         print("=" * 68 + "\n")

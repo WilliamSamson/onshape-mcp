@@ -1,8 +1,7 @@
 """Hugging Face Space entrypoint for Onshape MCP.
 Uses standard Gradio launch with FastMCP SSE routes injected at startup.
 Provides:
-1. Model Context Protocol SSE stream at `/sse` for ChatGPT, Claude, and Cursor
-2. FastMCP message receiver at `/messages/`
+1. Model Context Protocol Streamable HTTP endpoint at `/mcp`
 3. Live interactive dashboard on Gradio
 """
 
@@ -72,7 +71,7 @@ with gr.Blocks(title="Onshape CAD MCP Server") as demo:
     ### 🔗 Connection Endpoint
     Paste this into ChatGPT's connector dialog, with your token appended:
     ```text
-    https://x-r-1-8-onshape-cad-mcp.hf.space/sse?token=YOUR_MCP_TOKEN
+    https://x-r-1-8-onshape-cad-mcp.hf.space/mcp?token=YOUR_MCP_TOKEN
     ```
     The token is the `MCP_TOKEN` Space secret. It gates every request —
     this endpoint drives a live Onshape session.
@@ -93,9 +92,10 @@ if __name__ == "__main__":
     from onshape_mcp.tunnel import require_token
 
     app, local_url, share_url = demo.launch(prevent_thread_lock=True, ssr_mode=False)
-    for route in mcp.sse_app().routes:
-        # Both /sse (Route) and /messages (Mount) expose a plain ASGI
-        # callable as .app, so one gate covers each.
+    # Streamable HTTP at /mcp, not SSE: proxies (Cloudflare, and HF's own
+    # front end) buffer the long-lived SSE response, so the handshake
+    # never completes through them.
+    for route in mcp.streamable_http_app().routes:
         route.app = require_token(route.app, MCP_TOKEN)
         app.routes.insert(0, route)
     demo.block_thread()
