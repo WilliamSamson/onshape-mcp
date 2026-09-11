@@ -72,6 +72,10 @@ class Settings:
     # "auto" tries real Chrome first then bundled Chromium,
     # "chrome" requires real Chrome, "chromium" uses bundled Chromium only.
     browser_channel: str = os.getenv("ONSHAPE_BROWSER_CHANNEL", "auto")
+    # Attach to an already-running Chrome over the DevTools protocol
+    # instead of launching a fresh browser, so the driver inherits the
+    # session you are already logged into. Empty = launch our own.
+    cdp_url: str = os.getenv("ONSHAPE_CDP_URL", "")
     # Drawing-scale calibration knob. Empty = derive from canvas height
     # (see ui_actions.px_per_mm). Set a number to pin it when your zoom
     # level differs from Onshape's default new-sketch fit.

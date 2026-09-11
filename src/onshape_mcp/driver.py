@@ -53,6 +53,22 @@ class OnshapeDriver:
 
     async def start(self, headless: bool = True) -> Page:
         self._pw = await async_playwright().start()
+
+        # Attach to a Chrome you already have open, instead of launching a
+        # second browser with its own empty session. Whatever you're logged
+        # into, the driver is logged into — no cookie export, no expiry, and
+        # you watch it work in your own window.
+        #
+        # Start Chrome with:
+        #   google-chrome --remote-debugging-port=9222
+        # then set ONSHAPE_CDP_URL=http://localhost:9222
+        if settings.cdp_url:
+            self._ctx = (await self._pw.chromium.connect_over_cdp(settings.cdp_url)).contexts[0]
+            self._channel_used = f"cdp:{settings.cdp_url}"
+            self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+            print(f"[driver] attached to your running Chrome at {settings.cdp_url}", file=sys.stderr)
+            return self._page
+
         self._clear_stale_locks()
         # We use the profile dir mainly for the SingletonLock dance and
         # any future extensions we might want to install. Cache is not
@@ -103,7 +119,6 @@ class OnshapeDriver:
                     if "playwright install" in err_msg or "executable doesn't exist" in err_msg:
                         print("[driver] Chromium executable missing. Installing via playwright...", file=sys.stderr)
                         import subprocess
-                        import sys
                         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
                         self._ctx = await self._pw.chromium.launch_persistent_context(
                             user_data_dir=str(self.profile_dir),
@@ -128,7 +143,6 @@ class OnshapeDriver:
                 if "playwright install" in err_msg or "executable doesn't exist" in err_msg:
                     print("[driver] Chromium executable missing. Installing via playwright...", file=sys.stderr)
                     import subprocess
-                    import sys
                     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
                     self._ctx = await self._pw.chromium.launch_persistent_context(
                         user_data_dir=str(self.profile_dir),
@@ -266,7 +280,14 @@ class OnshapeDriver:
     def channel_used(self) -> str:
         return getattr(self, "_channel_used", "unknown")
 
-    async def open(self, url: str | None = None) -> None:
+    async def open(self, url: str | None = None, require_auth: bool = True) -> None:
+        """Navigate to an Onshape URL.
+
+        `require_auth=False` is for the login flow, which *needs* to land
+        on the signin page — with it left on, `onshape-mcp login` raised
+        "you are not signed in, run onshape-mcp login" and could never
+        sign you in.
+        """
         if not url:
             if settings.onshape_default_doc:
                 doc = settings.onshape_default_doc
@@ -281,7 +302,7 @@ class OnshapeDriver:
         # toolbar is actually on screen.
         await self.page.goto(url, wait_until="load", timeout=60_000)
         await self.wait_for_app()
-        if "signin" in self.page.url:
+        if require_auth and "signin" in self.page.url:
             raise RuntimeError(
                 "Onshape redirected to its signin page — the saved session is no longer "
                 "valid.\n"
@@ -457,7 +478,9 @@ class OnshapeDriver:
     # Lifecycle
 
     async def close(self) -> None:
-        if self._ctx is not None:
+        # When attached over CDP the browser belongs to the user, not to
+        # us. Closing the context would shut their windows.
+        if self._ctx is not None and not settings.cdp_url:
             await self._ctx.close()
         if self._pw is not None:
             await self._pw.stop()
@@ -472,11 +495,22 @@ async def login_interactive() -> None:
     """
     d = OnshapeDriver()
     await d.start(headless=False)
-    await d.open(ONSHAPE_URL)
+    # The stale cookies we just injected are what force the signin
+    # redirect; clear them so Onshape shows a clean login form.
+    await d._ctx.clear_cookies()
+    await d.open(ONSHAPE_URL, require_auth=False)
     print("Log into Onshape in the opened browser, then press Enter here.", file=sys.stderr)
     input("> ")
+    if "signin" in d.page.url:
+        print(
+            "Still on the signin page — not saving. Finish signing in, then re-run.",
+            file=sys.stderr,
+        )
+        await d.close()
+        return
     n = await d.save_cookies()
     print(f"Saved {n} cookies to {d.cookie_file}", file=sys.stderr)
+    print("Verify with: onshape-mcp doctor", file=sys.stderr)
     await d.close()
 
 
