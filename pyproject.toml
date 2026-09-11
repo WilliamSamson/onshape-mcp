@@ -23,6 +23,8 @@ dependencies = [
 [project.scripts]
 onshape-mcp = "onshape_mcp.server:main"
 onshape-mcp-setup = "onshape_mcp.setup:main"
+# Same thing as `onshape-mcp up`, available even before that hook lands.
+onshape-mcp-up = "onshape_mcp.up:main"
 
 [project.optional-dependencies]
 dev = [

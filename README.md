@@ -74,34 +74,51 @@ uv run onshape-mcp setup
 uv run onshape-mcp
 ```
 
-## Testing against a live ChatGPT session, without redeploying
-
-The Hugging Face Space is for other people. For your own iteration, run the
-server locally and tunnel it — ChatGPT connects to your working tree, so a
-code change only needs a restart, not a Space rebuild.
+## One command: `up`
 
 ```bash
-uv run onshape-mcp share
+uv run onshape-mcp up
 ```
 
-That prints a URL like `https://<random>.trycloudflare.com/sse?token=<token>`.
-Paste it into ChatGPT under **Settings → Connectors → Add**. The tunnel drives
-the browser on *your* machine with *your* Onshape session, so you see each
-action happen live.
+That is the whole setup. It stops stale servers and orphaned tunnels (an
+abandoned tunnel keeps a public hostname alive with nothing behind it, which
+is what a 502 in your client actually means), frees the port, checks the
+browser engine, **opens Onshape and confirms you are signed in**, then serves
+and prints the connector URL.
 
-Two things worth knowing:
+It refuses to print a URL it has not proven works. Counting cookies is not a
+check: Onshape's session cookies carry no expiry and are revoked server-side,
+so a dead session looks identical to a live one on disk.
 
-- **The URL is a credential.** Anyone holding it can edit your Onshape
-  documents. A token is minted per run and the whole thing dies on Ctrl+C. Pin
-  a stable one with `MCP_TOKEN` in `.env` if you'd rather not re-paste the URL
-  into ChatGPT after every restart.
-- **Restart to pick up code changes.** Ctrl+C and re-run. With `MCP_TOKEN`
-  pinned, the path stays valid but the `trycloudflare.com` hostname is new each
-  run; `cloudflared tunnel --name` gives you a stable hostname if that churn
-  gets annoying.
+Paste the printed URL into ChatGPT under **Settings → Connectors → Add**. It
+drives the browser on *your* machine with *your* Onshape session.
+
+### Make the URL permanent
+
+By default the hostname is random each run, so you must re-paste it after every
+restart. To stop that, reserve an ngrok domain (free tier includes one) and set:
+
+```bash
+ONSHAPE_NGROK_DOMAIN=your-name.ngrok-free.app
+```
+
+`up` then uses it and the URL is identical every run — paste it into ChatGPT
+once. `ONSHAPE_TUNNEL_SUBDOMAIN` asks localtunnel for a name instead, but that
+is best-effort: it silently hands back a random hostname when the name is
+taken, so the banner tells you whether you actually got what you asked for.
+
+With a permanent URL the server can update itself in place:
+
+- `onshape_mcp_version` — the running commit, and whether `origin/main` moved.
+- `onshape_mcp_update(restart=True)` — pull and re-exec. The URL survives, so
+  the connector just reconnects.
+
+**The URL is a credential.** Anyone holding it can edit your Onshape documents.
+Pin `MCP_TOKEN` in `.env` to keep the token stable across restarts.
 
 The Space (`deploy_hf/`) installs this package from git rather than vendoring a
-copy of `src/`, and requires its own `MCP_TOKEN` secret before it will start.
+copy of `src/`, serves the same `/mcp` endpoint, and requires its own
+`MCP_TOKEN` secret before it will start.
 
 ## A note on Google + automated browsers
 
@@ -163,3 +180,10 @@ Five layers, bottom up:
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Interactive sketch editing
+
+A new one-step controller supports shared browser sessions, inline frames,
+confirmed target previews, detail edits, manual handoff, request retry protection,
+and checkpoint-checked sketch undo. See [the interactive guide](docs/interactive-sketch.md)
+for setup, tool calls, verification semantics and remaining live acceptance checks.
