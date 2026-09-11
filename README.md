@@ -45,34 +45,58 @@ Gemini sees each screenshot, picks the next tool, calls it, repeats until
 the goal is met or it bails. Bounded by `max_steps` (default 25) and a
 stuck detector (3 identical screenshots in a row = stop).
 
-## Quick Start for Testers (1-Command Smart Setup)
+## Install
 
-To test Onshape MCP in **Claude Desktop** with zero manual configuration:
+Add this to your MCP client's config. Nothing else — no account, no API key,
+no per-user server, no token.
 
-```bash
-uvx --from git+https://github.com/WilliamSamson/onshape-mcp onshape-mcp setup
+```json
+{
+  "mcpServers": {
+    "onshape": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/WilliamSamson/onshape-mcp", "onshape-mcp"]
+    }
+  }
+}
 ```
 
-The smart wizard will automatically:
-1. Ensure Playwright's Chromium browser engine is downloaded.
-2. Auto-detect and sync your active Onshape login session from your local browser (Chrome, Edge, Brave, etc.) into `~/.onshape-mcp/cookies/` — no manual cookie copying needed.
-3. Auto-configure Claude Desktop (`claude_desktop_config.json`) across macOS, Windows, and Linux.
-4. Keep all credentials and cookies isolated on your machine with **zero hardcoded paths**.
+| Client | File |
+| --- | --- |
+| Claude Desktop | `claude_desktop_config.json` |
+| Claude Code | `claude mcp add onshape -- uvx --from git+https://github.com/WilliamSamson/onshape-mcp onshape-mcp` |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| VS Code (Cline / Roo) | `cline_mcp_settings.json` |
 
-Restart Claude Desktop, and you can immediately ask:
-> *"Draw a 10cm by 5cm box on the Top plane in Onshape"*
-
----
-
-## Local Development & Manual Run
+Or let it find and write those for you:
 
 ```bash
-git clone https://github.com/WilliamSamson/onshape-mcp.git
-cd onshape-mcp
-uv sync
-uv run onshape-mcp setup
-uv run onshape-mcp
+uvx --from git+https://github.com/WilliamSamson/onshape-mcp onshape-mcp setup -y
 ```
+
+Restart the client and ask for something:
+
+> *Draw a 50 x 30 mm rectangle on the Top plane*
+
+### Why there is nothing to configure
+
+**Your Onshape session is read from the browser you already use.** If you are
+signed in to Onshape in Chrome, Brave, Edge, Firefox or Vivaldi, the server
+picks that session up. Nothing to export, no keys to paste, and no per-user
+server to stand up. Signed out? Run `onshape-mcp login` once.
+
+Chromium is downloaded on first use (~150 MB). `setup` does it up front so the
+first request is not waiting on a download.
+
+Optional `.env` settings: `ONSHAPE_DEFAULT_DOC` to pin a document,
+`ONSHAPE_HEADLESS=false` to watch it work, `ONSHAPE_CDP_URL` to drive a Chrome
+you already have open.
+
+## Remote clients (ChatGPT web)
+
+The config above covers every client that speaks MCP over stdio. ChatGPT on the
+web needs an HTTPS endpoint instead, which is what `up` provides.
 
 ## One command: `up`
 

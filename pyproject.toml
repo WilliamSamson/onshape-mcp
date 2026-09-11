@@ -1,7 +1,16 @@
 [project]
 name = "onshape-mcp"
-version = "0.0.1"
-description = "Visual agentic MCP server for Onshape, driven by Gemini web vision."
+version = "0.1.0"
+description = "MCP server that drives the Onshape web UI — sketch, dimension, constrain and extrude from any MCP client."
+keywords = ["mcp", "onshape", "cad", "model-context-protocol", "playwright", "automation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
@@ -19,6 +28,10 @@ dependencies = [
     "flask>=3.0.0",
     "gemini-webapi>=2.0.0",  # verify GeminiClient API on first install
 ]
+
+[project.urls]
+Homepage = "https://github.com/WilliamSamson/onshape-mcp"
+Issues = "https://github.com/WilliamSamson/onshape-mcp/issues"
 
 [project.scripts]
 onshape-mcp = "onshape_mcp.server:main"
