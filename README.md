@@ -55,7 +55,7 @@ no per-user server, no token.
   "mcpServers": {
     "onshape": {
       "command": "uvx",
-      "args": ["--from", "git+https://github.com/WilliamSamson/onshape-mcp", "onshape-mcp"]
+      "args": ["onshape-mcp"]
     }
   }
 }
@@ -64,7 +64,7 @@ no per-user server, no token.
 | Client | File |
 | --- | --- |
 | Claude Desktop | `claude_desktop_config.json` |
-| Claude Code | `claude mcp add onshape -- uvx --from git+https://github.com/WilliamSamson/onshape-mcp onshape-mcp` |
+| Claude Code | `claude mcp add onshape -- uvx onshape-mcp` |
 | Cursor | `~/.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 | VS Code (Cline / Roo) | `cline_mcp_settings.json` |
@@ -72,7 +72,7 @@ no per-user server, no token.
 Or let it find and write those for you:
 
 ```bash
-uvx --from git+https://github.com/WilliamSamson/onshape-mcp onshape-mcp setup -y
+uvx onshape-mcp setup -y
 ```
 
 Restart the client and ask for something:
