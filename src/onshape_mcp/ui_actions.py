@@ -447,12 +447,22 @@ async def _ensure_viewport_coords(d: OnshapeDriver, pt: tuple[float, float]) -> 
 async def _span_px(d: OnshapeDriver, mm: float | None, default_mm: float) -> tuple[float, bool]:
     """Convert a mm span to a drawable pixel span. Returns (px, clamped).
 
-    Clamping keeps the click on the canvas for very large or very small
-    parts; the caller reports it rather than silently resizing the part.
+    The floor keeps two clicks far enough apart for Onshape to treat them
+    as distinct points and for the result to still be clickable when we
+    dimension it. Below roughly 30px the dimension pick finds nothing.
+
+    Clamping is not cosmetic: at the typical ~3 px/mm a 9.5mm circle wants
+    14px, gets drawn at the floor, and the drawn size wins — Onshape
+    recorded 24.9mm for a 9.5mm request. Callers must treat `clamped` as
+    "this size is not trustworthy", never as a rounding detail.
+
+    ponytail: the honest fix is to build these entities through the
+    Feature API with exact mm coordinates instead of clicking pixels —
+    onshape_api.create_m4_profile already does that and is immune to zoom.
     """
     scale = await px_per_mm(d)
     raw = (default_mm if mm is None else mm) * scale
-    px = max(40.0, min(550.0, abs(raw)))
+    px = max(30.0, min(550.0, abs(raw)))
     return px, px != abs(raw)
 
 
@@ -620,7 +630,20 @@ async def sketch_circle(
     shot = await d.screenshot("sketch_circle.png")
     meta: dict[str, Any] = {"center": list(c), "radius_mm": r_mm}
     if clamped:
+        # Too small to draw at true scale, so the drawn size can win over
+        # the dimension. Reporting ok here is how a 9.5mm circle shipped
+        # as 24.9mm without anyone noticing.
         meta["draw_scale_clamped"] = True
+        r = Result(
+            False,
+            f"circle r={r_mm}mm is too small to place accurately at this zoom — "
+            f"its size is NOT reliable. Zoom in (onshape_view_fit) or set "
+            f"ONSHAPE_PX_PER_MM, then verify the diameter before trusting it.",
+            shot,
+            meta,
+        )
+        _record("sketch.circle", meta, r)
+        return r
     r = Result(True, f"circle r={r_mm}mm at {c}", shot, meta)
     _record("sketch.circle", meta, r)
     return r
