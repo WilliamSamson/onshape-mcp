@@ -71,7 +71,7 @@ def require_token(app: Any, token: str) -> Any:
                 "error": "unauthorized",
                 "hint": "Append ?token=<your MCP_TOKEN> to the URL, or send "
                         "an 'Authorization: Bearer <token>' header.",
-                "endpoint": "MCP clients connect to /sse, not /",
+                "endpoint": "MCP clients connect to /mcp, not /",
             }).encode()
             await send({
                 "type": "http.response.start",
@@ -102,13 +102,22 @@ def require_token(app: Any, token: str) -> Any:
     return gated
 
 
-def serve_sse(host: str, port: int, token: str) -> None:
-    """Run the MCP SSE app behind a shared-secret check."""
+def serve_sse(host: str, port: int, token: str, streamable: bool = True) -> None:
+    """Serve MCP behind a shared-secret check.
+
+    Streamable HTTP by default. The older SSE transport holds one long
+    response open for every server->client message, and Cloudflare Quick
+    Tunnels buffer that response indefinitely: the endpoint returns 200
+    and then zero bytes forever, so no client can finish a handshake
+    through a tunnel. Streamable HTTP answers over ordinary POSTs, which
+    proxies pass straight through.
+    """
     import uvicorn
 
     from .server import mcp
 
-    uvicorn.run(require_token(mcp.sse_app(), token), host=host, port=port, log_level="info")
+    app = mcp.streamable_http_app() if streamable else mcp.sse_app()
+    uvicorn.run(require_token(app, token), host=host, port=port, log_level="info")
 
 
 def find_tunnel_binary() -> tuple[str, list[str]] | None:
@@ -168,7 +177,7 @@ def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
         print("  • Linux:   sudo apt install cloudflared  (or download binary)")
         print("  • Windows: winget install Cloudflare.cloudflared")
         print("=" * 68)
-        print(f"Starting local SSE server at http://{host}:{port}/sse?token={token}")
+        print(f"Starting local MCP server at http://{host}:{port}/mcp?token={token}")
         serve_sse(host, port, token)
         return
 
@@ -225,10 +234,10 @@ def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
         time.sleep(0.5)
 
     if public_url:
-        sse_url = f"{public_url.rstrip('/')}/sse?token={token}"
+        sse_url = f"{public_url.rstrip('/')}/mcp?token={token}"
         print("\n" + "=" * 68)
         print("🎉 Your Onshape MCP is live on the internet:")
-        print(f"\n👉 MCP SSE URL:  \033[1;32m{sse_url}\033[0m\n")
+        print(f"\n👉 MCP URL:  \033[1;32m{sse_url}\033[0m\n")
         print("This URL drives YOUR logged-in Onshape session. Treat it as a")
         print("password: anyone who has it can edit your documents.\n")
         if pinned:
@@ -244,7 +253,7 @@ def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
         print("=" * 68 + "\n")
     else:
         print("⚠ Tunnel did not return a public URL in 15s. Running locally.")
-        print(f"Local endpoint: http://{host}:{port}/sse?token={token}\n")
+        print(f"Local endpoint: http://{host}:{port}/mcp?token={token}\n")
 
     try:
         serve_sse(host, port, token)

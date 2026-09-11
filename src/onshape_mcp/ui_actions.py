@@ -510,19 +510,39 @@ async def sketch_rectangle(
     # Drive the solver with the true mm values. The pixels above only had
     # to land a rough rectangle on screen; these dimensions are what makes
     # it the requested size.
+    async def _dimension_edge(along: str, value: float) -> bool:
+        """Dimension one edge, retrying at a few points along it.
+
+        Picking an edge is flaky — whichever attempt runs first tends to
+        miss, so a single fixed point silently left one side undriven.
+        Walking the edge costs one extra click on the rare retry.
+        """
+        for frac in (0.3, 0.55, 0.75):
+            if along == "top":
+                pick = (min_x + dx * frac, min_y)
+                label = (pick[0], pick[1] - 45.0)
+            else:
+                pick = (min_x, min_y + dy * frac)
+                label = (pick[0] - 55.0, pick[1])
+            if (await sketch_dimension(d, pick, label, value)).ok:
+                return True
+            await asyncio.sleep(0.4)
+        return False
+
+    driven: dict[str, bool] = {}
     with _px_space():
         if w_mm is not None and h_mm is not None and w_mm == h_mm:
             # Square: Equal constraint first so it stays strictly equilateral
             await sketch_equal(d, top_pick, left_pick)
             await asyncio.sleep(0.5)
-            await sketch_dimension(d, top_pick, top_label, w_mm)
-        elif w_mm is not None:
-            await sketch_dimension(d, top_pick, top_label, w_mm)
-            if h_mm is not None:
+            driven["width"] = await _dimension_edge("top", w_mm)
+            driven["height"] = driven["width"]  # Equal constraint carries it
+        else:
+            if w_mm is not None:
+                driven["width"] = await _dimension_edge("top", w_mm)
                 await asyncio.sleep(0.6)
-                await sketch_dimension(d, left_pick, left_label, h_mm)
-        elif h_mm is not None:
-            await sketch_dimension(d, left_pick, left_label, h_mm)
+            if h_mm is not None:
+                driven["height"] = await _dimension_edge("left", h_mm)
 
     shot = await d.screenshot("sketch_rectangle.png")
     meta: dict[str, Any] = {
@@ -536,10 +556,17 @@ async def sketch_rectangle(
     }
     if clamp_x or clamp_y:
         meta["draw_scale_clamped"] = True
+    meta["dimensions_driven"] = driven
+    # A dimension that did not land means the side is only as accurate as
+    # the pixels it was drawn at. Say so instead of claiming success.
+    undriven = [k for k, v in driven.items() if not v]
+    ok = not undriven
     note = f"rectangle {w_mm}x{h_mm} mm"
-    if clamp_x or clamp_y:
+    if undriven:
+        note += f" — WARNING: {', '.join(undriven)} not dimensioned, that side is approximate"
+    elif clamp_x or clamp_y:
         note += " (drawn at clamped on-screen size; driven dimensions are exact)"
-    r = Result(True, note, shot, meta)
+    r = Result(ok, note, shot, meta)
     _record("sketch.rectangle", meta, r)
     return r
 
@@ -633,7 +660,22 @@ async def sketch_dimension(
     await asyncio.sleep(0.15)
     await d.page.mouse.click(*l_xy)
     await asyncio.sleep(0.4)
-    # Type the new value into input.os-canvas-text-edit if present or directly
+
+    # Onshape opens its value editor once the dimension is actually
+    # attached to an entity. If it never appears the entity click missed,
+    # and typing would go nowhere — this used to return ok=True anyway,
+    # so a rectangle could come back claiming both sides were driven when
+    # only one was.
+    editor = d.page.locator("input.os-canvas-text-edit")
+    try:
+        await editor.first.wait_for(state="visible", timeout=3000)
+    except Exception:
+        await d.press_key("Escape")
+        shot = await d.screenshot("sketch_dimension_missed.png")
+        r = Result(False, f"sketch.dimension: nothing selectable at {e_xy}", shot)
+        _record("sketch.dimension", {"entity_xy": list(e_xy)}, r)
+        return r
+
     val_str = await _enter_value(d, value_mm)
     # Esc to drop the dimension tool, stay in sketch
     await d.press_key("Escape")
