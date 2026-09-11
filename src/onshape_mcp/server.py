@@ -212,6 +212,41 @@ async def onshape_view_iso() -> str:
 
 
 @cad_tool()
+async def onshape_sketch_exact(
+    plane: str = "Top",
+    name: str = "Exact Sketch",
+    shapes: list[dict[str, Any]] | None = None,
+) -> str:
+    """Create a sketch with EXACT millimetre geometry. Prefer this for anything
+    where the size matters, and always for parts smaller than ~15mm.
+
+    Builds the sketch through Onshape's Feature API instead of clicking the
+    canvas, then reads the geometry back and reports the measured values. Not
+    affected by zoom, canvas size, or the minimum-drawable-size clamp that
+    makes the click-based tools unreliable for small parts.
+
+    Coordinates and sizes are millimetres, (0,0) at the origin.
+    Shapes:
+    - {"type": "circle", "diameter_mm": 9.5, "center_x": 0, "center_y": 0}  (or radius_mm)
+    - {"type": "rectangle", "width_mm": 50, "height_mm": 30, "centered": true}
+    - {"type": "polygon", "sides": 6, "across_flats_mm": 8}  (or radius_mm, rotation_deg)
+    - {"type": "line", "p1": [0, 0], "p2": [50, 0]}
+    - {"type": "lines", "points": [[0,0], [40,0], [40,10]], "closed": true}
+
+    Returns the geometry Onshape actually stored, so a size can be trusted
+    rather than assumed.
+    """
+    try:
+        from .onshape_api import create_exact_sketch
+
+        d = await _driver_lazy()
+        res = await create_exact_sketch(d, plane=plane, shapes=shapes or [], name=name)
+        return json.dumps(res, indent=2)
+    except Exception as e:
+        return _format_error("onshape_sketch_exact", e)
+
+
+@cad_tool()
 async def onshape_create_sketch(
     plane: str = "Top",
     name: str | None = None,
