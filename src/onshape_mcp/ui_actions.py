@@ -474,6 +474,7 @@ async def sketch_rectangle(
     height: float | str | None = None,
     quadrant: str | int | None = None,
     centered: bool | None = None,
+    auto_dimension: bool = True,
 ) -> Result:
     if await d.page.locator(".feature-dialog:not(.ns-dialog-default-hidden)").count() == 0:
         return Result(False, "sketch.rectangle requires an active sketch")
@@ -519,6 +520,13 @@ async def sketch_rectangle(
     await d.press_key("Escape")
     await asyncio.sleep(0.3)
 
+    if not auto_dimension:
+        r = Result(True, "Rough rectangle drawn; select and dimension each edge in separate steps",
+                   await d.screenshot("rectangle_rough"),
+                   {"verified": False, "dimensions_driven": {}, "precision_pending": True})
+        _record("sketch.rectangle", {"corner1": list(c1), "corner2": list(c2)}, r)
+        return r
+
     min_x, max_x = min(c1[0], c2[0]), max(c1[0], c2[0])
     min_y, max_y = min(c1[1], c2[1]), max(c1[1], c2[1])
     # Pick points at 30% along edges to safely avoid datum axis lines and origin glyphs
@@ -561,10 +569,10 @@ async def sketch_rectangle(
     with _px_space():
         if w_mm is not None and h_mm is not None and w_mm == h_mm:
             # Square: Equal constraint first so it stays strictly equilateral
-            await sketch_equal(d, top_pick, left_pick)
+            equal_result = await sketch_equal(d, top_pick, left_pick)
             await asyncio.sleep(0.5)
             driven["width"] = await _dimension_edge("top", w_mm)
-            driven["height"] = driven["width"]  # Equal constraint carries it
+            driven["height"] = driven["width"] and equal_result.ok
         else:
             if w_mm is not None:
                 driven["width"] = await _dimension_edge("top", w_mm)
@@ -593,7 +601,7 @@ async def sketch_rectangle(
     if undriven:
         note += f" — WARNING: {', '.join(undriven)} not dimensioned, that side is approximate"
     elif clamp_x or clamp_y:
-        note += " (drawn at clamped on-screen size; driven dimensions are exact)"
+        note += " (drawn at clamped on-screen size; verify persisted dimensions)"
     r = Result(ok, note, shot, meta)
     _record("sketch.rectangle", meta, r)
     return r
@@ -604,6 +612,7 @@ async def sketch_circle(
     center: tuple[float, float] | None = None,
     radius_mm: float | str | None = None,
     centered: bool | None = None,
+    auto_dimension: bool = True,
 ) -> Result:
     t = await _activate_sketch_tool(d, "sketch.circle")
     if not t.ok:
@@ -622,13 +631,25 @@ async def sketch_circle(
     await d.click(*edge)
     await asyncio.sleep(0.1)
     await d.press_key("Escape")
+    if not auto_dimension:
+        r = Result(True, "Rough circle drawn; select its edge and dimension in a separate step",
+                   await d.screenshot("circle_rough"),
+                   {"verified": False, "precision_pending": True, "draw_scale_clamped": clamped})
+        _record("sketch.circle", {"center": list(c)}, r)
+        return r
     # The two clicks above only place a rough circle. Drive the real
     # radius through the solver so the part is the requested size
     # regardless of zoom.
     with _px_space():
-        await sketch_dimension(d, edge, (edge[0] + 50.0, edge[1] - 50.0), f"{r_mm * 2:g} mm")
+        dimension_result = await sketch_dimension(d, edge, (edge[0] + 50.0, edge[1] - 50.0), f"{r_mm * 2:g} mm")
     shot = await d.screenshot("sketch_circle.png")
     meta: dict[str, Any] = {"center": list(c), "radius_mm": r_mm}
+    meta["dimension_applied"] = dimension_result.ok
+    meta["verified"] = False
+    if not dimension_result.ok:
+        r = Result(False, f"Circle drawn but diameter was not applied: {dimension_result.note}", shot, meta)
+        _record("sketch.circle", meta, r)
+        return r
     if clamped:
         # Too small to draw at true scale, so the drawn size can win over
         # the dimension. Reporting ok here is how a 9.5mm circle shipped
@@ -725,7 +746,7 @@ async def sketch_dimension(
         True,
         f"dimensioned {val_str} at {e_xy}",
         shot,
-        {"value": val_str},
+        {"value": val_str, "verified": False, "verification": "editor_submitted; persisted readback required"},
     )
     _record(
         "sketch.dimension",
@@ -1740,3 +1761,22 @@ async def doc_redo(d: OnshapeDriver) -> Result:
         return r
     except Exception as e:
         return Result(False, f"Redo failed: {e}")
+
+
+async def view_zoom(d: OnshapeDriver, x: float, y: float, delta_y: float) -> Result:
+    """Zoom with the real mouse wheel at a freshly observed canvas point.
+    Wheel delta is pixels, not a physical scale calibration. Re-observe afterward.
+    """
+    import math
+    if not all(math.isfinite(v) for v in (x, y, delta_y)) or abs(delta_y) > 1200:
+        raise ValueError("Use finite coordinates and wheel delta between -1200 and 1200")
+    canvas = d.page.locator("canvas.os-main-canvas, canvas").first
+    box = await canvas.bounding_box()
+    if not box or not (box['x'] <= x < box['x'] + box['width'] and box['y'] <= y < box['y'] + box['height']):
+        raise ValueError("Zoom anchor must be inside the observed canvas")
+    await d.page.mouse.move(x, y)
+    await d.page.mouse.wheel(0, delta_y)
+    await d.page.wait_for_timeout(200)
+    result = Result(True, "Viewport zoom changed; reselect targets before editing", await d.screenshot("zoom"))
+    _record("view.zoom", {"x": x, "y": y, "delta_y": delta_y}, result)
+    return result

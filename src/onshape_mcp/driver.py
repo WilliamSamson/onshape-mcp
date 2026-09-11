@@ -22,6 +22,8 @@ import asyncio
 import json
 import os
 import time
+import uuid
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any
 
@@ -63,9 +65,20 @@ class OnshapeDriver:
         #   google-chrome --remote-debugging-port=9222
         # then set ONSHAPE_CDP_URL=http://localhost:9222
         if settings.cdp_url:
-            self._ctx = (await self._pw.chromium.connect_over_cdp(settings.cdp_url)).contexts[0]
+            browser = await self._pw.chromium.connect_over_cdp(settings.cdp_url)
+            pages = [p for context in browser.contexts for p in context.pages
+                     if urlparse(p.url).hostname == "cad.onshape.com" and "/documents/" in urlparse(p.url).path]
+            if settings.tab_url:
+                pages = [p for p in pages if p.url.split("#")[0] == settings.tab_url.split("#")[0]]
+            if len(pages) != 1:
+                await self._pw.stop()
+                raise RuntimeError("Select exactly one Onshape document tab with ONSHAPE_TAB_URL; "
+                                   f"found {len(pages)} matching tabs. No tab was navigated.")
+            self._page = pages[0]
+            self._ctx = self._page.context
+            self._attached = True
             self._channel_used = f"cdp:{settings.cdp_url}"
-            self._page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+            await self._page.bring_to_front()
             print(f"[driver] attached to your running Chrome at {settings.cdp_url}", file=sys.stderr)
             return self._page
 
@@ -351,14 +364,21 @@ class OnshapeDriver:
         except Exception:
             return False
 
+    @staticmethod
+    def _screenshot_path(name: str) -> Path:
+        # Client labels are not paths. Every frame is immutable and unique.
+        label = Path(name).name
+        stem = Path(label).stem or "shot"
+        return settings.journal_dir / f"{stem}-{uuid.uuid4().hex}.png"
+
     async def screenshot(self, name: str = "shot.png") -> Path:
-        out = settings.journal_dir / name
+        out = self._screenshot_path(name)
         out.parent.mkdir(parents=True, exist_ok=True)
         await self.page.screenshot(path=str(out), full_page=False)
         return out
 
     async def screenshot_clip(self, name: str, rect: dict[str, float]) -> Path:
-        out = settings.journal_dir / name
+        out = self._screenshot_path(name)
         out.parent.mkdir(parents=True, exist_ok=True)
         await self.page.screenshot(path=str(out), clip=rect)
         return out
@@ -478,7 +498,7 @@ class OnshapeDriver:
     async def close(self) -> None:
         # When attached over CDP the browser belongs to the user, not to
         # us. Closing the context would shut their windows.
-        if self._ctx is not None and not settings.cdp_url:
+        if self._ctx is not None and not getattr(self, "_attached", False):
             await self._ctx.close()
         if self._pw is not None:
             await self._pw.stop()

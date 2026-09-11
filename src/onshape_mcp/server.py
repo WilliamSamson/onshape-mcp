@@ -10,15 +10,21 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from functools import wraps
+from typing import Literal
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import TextContent, ImageContent
 
 from . import tools as datasheet
 from . import ui_actions
 from .dispatch import TOOL_DISPATCH, dispatch
 from .driver import OnshapeDriver
+from .config import settings
+from .interactive import InteractiveSession
+from .sketch_state import read_features, verify_dimension
 from .fast_exec import execute as fast_execute
 from .intent import parse as parse_intent
 from .journal import JournalEntry, journal
@@ -33,6 +39,21 @@ mcp = FastMCP(
 _driver: OnshapeDriver | None = None
 _vision: GeminiWeb | None = None
 _loop: AgentLoop | None = None
+_interactive: InteractiveSession | None = None
+_tool_lock = asyncio.Lock()
+
+
+def cad_tool():
+    """Serialize complete legacy tool calls; interactive requests own the canvas."""
+    def register(fn):
+        @wraps(fn)
+        async def guarded(*args, **kwargs):
+            async with _tool_lock:
+                if _interactive is not None and _interactive.phase in ("ready", "running", "paused", "manual"):
+                    return json.dumps({"ok": False, "error": "Interactive request owns the canvas; use onshape_workflow or cancel it first."})
+                return await fn(*args, **kwargs)
+        return mcp.tool()(guarded)
+    return register
 
 
 def _format_error(tool_name: str, err: Exception) -> str:
@@ -52,9 +73,16 @@ def _format_error(tool_name: str, err: Exception) -> str:
 async def _driver_lazy() -> OnshapeDriver:
     global _driver
     if _driver is None:
-        _driver = OnshapeDriver()
-        await _driver.start(headless=True)
-        await _driver.open()
+        driver = OnshapeDriver()
+        try:
+            await driver.start(headless=settings.headless)
+            # An attached tab is already selected; never navigate it implicitly.
+            if not getattr(driver, "_attached", False):
+                await driver.open()
+        except Exception:
+            await driver.close()
+            raise
+        _driver = driver
     return _driver
 
 
@@ -68,14 +96,14 @@ async def _vision_lazy() -> GeminiWeb:
 async def _loop_lazy() -> AgentLoop:
     global _loop
     if _loop is None:
-        _loop = AgentLoop()
+        _loop = AgentLoop(driver=await _driver_lazy(), vision=await _vision_lazy())
     return _loop
 
 
 # Meta & Information Tools
 
 
-@mcp.tool()
+@cad_tool()
 async def screenshot(name: str = "shot.png") -> str:
     """Take a screenshot of the current Onshape viewport. Returns the absolute file path."""
     try:
@@ -89,7 +117,7 @@ async def screenshot(name: str = "shot.png") -> str:
         return _format_error("screenshot", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def describe_view(question: str = "What do you see in the Onshape viewport?") -> str:
     """Screenshot + ask Gemini vision to describe what's in the viewport."""
     try:
@@ -102,19 +130,19 @@ async def describe_view(question: str = "What do you see in the Onshape viewport
         return _format_error("describe_view", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def tool_datasheet() -> str:
     """Return the entire Onshape tool vocabulary, parameters, and preconditions as markdown."""
     return datasheet.as_prompt_block()
 
 
-@mcp.tool()
+@cad_tool()
 async def journal_tail(n: int = 20) -> str:
     """Return the last N actions executed against Onshape."""
     return json.dumps(journal.tail(n), indent=2, ensure_ascii=False)
 
 
-@mcp.tool()
+@cad_tool()
 async def open_doc(url: str) -> str:
     """Navigate to an Onshape document URL or path."""
     try:
@@ -127,7 +155,7 @@ async def open_doc(url: str) -> str:
         return _format_error("open_doc", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def viewport_size() -> str:
     """Return the current viewport dimensions in pixels."""
     try:
@@ -140,7 +168,7 @@ async def viewport_size() -> str:
 # View & Camera Tools
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_view_fit() -> str:
     """Zoom and pan to fit all visible geometry in the viewport ('f')."""
     try:
@@ -150,7 +178,7 @@ async def onshape_view_fit() -> str:
         return _format_error("view.fit", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_view_top() -> str:
     """Orient camera to look directly at the Top view."""
     try:
@@ -160,7 +188,7 @@ async def onshape_view_top() -> str:
         return _format_error("view.top", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_view_front() -> str:
     """Orient camera to look directly at the Front view."""
     try:
@@ -170,7 +198,7 @@ async def onshape_view_front() -> str:
         return _format_error("view.front", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_view_iso() -> str:
     """Orient camera to Isometric view."""
     try:
@@ -183,7 +211,7 @@ async def onshape_view_iso() -> str:
 # Sketch Creation Tools
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_create_sketch(
     plane: str = "Top",
     name: str | None = None,
@@ -213,7 +241,7 @@ async def onshape_create_sketch(
         return _format_error("onshape_create_sketch", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_start(
     plane_x: float | None = None,
     plane_y: float | None = None,
@@ -229,7 +257,7 @@ async def onshape_sketch_start(
         return _format_error("sketch.start", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_exit(commit: bool = True) -> str:
     """Exit the active sketch and accept (commit=True) or discard (commit=False) changes."""
     try:
@@ -239,7 +267,7 @@ async def onshape_sketch_exit(commit: bool = True) -> str:
         return _format_error("sketch.exit", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_rectangle(
     corner1_x: float | None = None,
     corner1_y: float | None = None,
@@ -267,7 +295,7 @@ async def onshape_sketch_rectangle(
         return _format_error("sketch.rectangle", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_circle(
     center_x: float | None = None,
     center_y: float | None = None,
@@ -286,7 +314,7 @@ async def onshape_sketch_circle(
         return _format_error("sketch.circle", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_line(p1_x: float, p1_y: float, p2_x: float, p2_y: float) -> str:
     """Draw a line segment from (p1_x, p1_y) to (p2_x, p2_y)."""
     try:
@@ -296,7 +324,7 @@ async def onshape_sketch_line(p1_x: float, p1_y: float, p2_x: float, p2_y: float
         return _format_error("sketch.line", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_polygon(
     sides: int = 6,
     radius_mm: float = 25.0,
@@ -319,7 +347,7 @@ async def onshape_sketch_polygon(
         return _format_error("sketch.polygon", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_spline(points: list[list[float]]) -> str:
     """Draw a smooth spline curve through a list of [[x1, y1], [x2, y2], ...] points."""
     try:
@@ -330,7 +358,7 @@ async def onshape_sketch_spline(points: list[list[float]]) -> str:
         return _format_error("sketch.spline", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_arc(
     p1_x: float,
     p1_y: float,
@@ -350,7 +378,7 @@ async def onshape_sketch_arc(
         return _format_error("sketch.arc", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_point(x: float, y: float) -> str:
     """Place a sketch point at (x, y)."""
     try:
@@ -360,7 +388,7 @@ async def onshape_sketch_point(x: float, y: float) -> str:
         return _format_error("sketch.point", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_m4_profile(length_mm: float = 20.0) -> str:
     """Create an exact, closed M4 socket-head cap-screw half-profile on Front.
 
@@ -374,7 +402,7 @@ async def onshape_m4_profile(length_mm: float = 20.0) -> str:
         return _format_error("sketch.m4_profile", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_text(
     corner1_x: float, corner1_y: float, corner2_x: float, corner2_y: float, text: str
 ) -> str:
@@ -395,7 +423,7 @@ async def onshape_sketch_text(
 # Sketch Modifications & Operations
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_construction(x: float | None = None, y: float | None = None) -> str:
     """Toggle construction mode, or convert the entity at (x, y) to/from construction geometry ('q')."""
     try:
@@ -406,7 +434,7 @@ async def onshape_sketch_construction(x: float | None = None, y: float | None = 
         return _format_error("sketch.construction", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_fillet(vertex_x: float, vertex_y: float, radius_mm: float = 5.0) -> str:
     """Add a rounded 2D fillet of radius_mm at corner/vertex (vertex_x, vertex_y)."""
     try:
@@ -418,7 +446,7 @@ async def onshape_sketch_fillet(vertex_x: float, vertex_y: float, radius_mm: flo
         return _format_error("sketch.fillet", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_chamfer(
     vertex_x: float, vertex_y: float, distance_mm: float = 5.0
 ) -> str:
@@ -434,7 +462,7 @@ async def onshape_sketch_chamfer(
         return _format_error("sketch.chamfer", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_trim(x: float, y: float) -> str:
     """Trim a curve segment back to the nearest intersections by clicking at (x, y) ('m')."""
     try:
@@ -444,7 +472,7 @@ async def onshape_sketch_trim(x: float, y: float) -> str:
         return _format_error("sketch.trim", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_extend(x: float, y: float) -> str:
     """Extend a curve endpoint at (x, y) to the nearest boundary ('x')."""
     try:
@@ -454,7 +482,7 @@ async def onshape_sketch_extend(x: float, y: float) -> str:
         return _format_error("sketch.extend", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_offset(
     entity_x: float,
     entity_y: float,
@@ -477,7 +505,7 @@ async def onshape_sketch_offset(
         return _format_error("sketch.offset", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_mirror(
     centerline_x: float, centerline_y: float, entity_x: float, entity_y: float
 ) -> str:
@@ -498,7 +526,7 @@ async def onshape_sketch_mirror(
 # Dimensions & Constraints
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_dimension(
     entity_x: float, entity_y: float, label_x: float, label_y: float, value_mm: float | str
 ) -> str:
@@ -517,7 +545,7 @@ async def onshape_sketch_dimension(
         return _format_error("sketch.dimension", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_sketch_constrain(
     constraint_type: str,
     entities: list[list[float]],
@@ -538,7 +566,7 @@ async def onshape_sketch_constrain(
 # Feature Operations
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_feature_extrude(depth_mm: float | None = None) -> str:
     """Extrude the active sketch or selected face by depth_mm."""
     try:
@@ -548,7 +576,7 @@ async def onshape_feature_extrude(depth_mm: float | None = None) -> str:
         return _format_error("feature.extrude", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_feature_fillet(radius_mm: float | None = None) -> str:
     """Round selected 3D model edges by radius_mm."""
     try:
@@ -558,7 +586,7 @@ async def onshape_feature_fillet(radius_mm: float | None = None) -> str:
         return _format_error("feature.fillet", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_feature_chamfer(distance_mm: float | None = None) -> str:
     """Bevel selected 3D model edges by distance_mm."""
     try:
@@ -571,7 +599,7 @@ async def onshape_feature_chamfer(distance_mm: float | None = None) -> str:
 # Generic Tool Dispatcher (with clean un-bound tool guard)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_execute(tool: str, args: dict[str, Any] | None = None) -> str:
     """Generic tool dispatcher. Calls any registered tool by name with arguments.
     Returns clear public error messages if a tool is un-bound or fails."""
@@ -598,7 +626,7 @@ async def onshape_execute(tool: str, args: dict[str, Any] | None = None) -> str:
 # Autonomous Agent (Fast Path + Vision Loop)
 
 
-@mcp.tool()
+@cad_tool()
 async def act(goal: str, max_steps: int = 25) -> str:
     """Autonomous CAD agent. Takes a high-level goal in natural language (e.g.
     'draw a 10cm by 5cm box in Quadrant 1 on the top plane', 'draw a 6-sided polygon')
@@ -700,7 +728,7 @@ async def act(goal: str, max_steps: int = 25) -> str:
 # Feature Tree & History Management
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_feature_delete(name: str) -> str:
     """Delete a feature or sketch by name (e.g. 'Sketch 1', 'Sketch 2', 'Extrude 1') from the Part Studio tree."""
     try:
@@ -711,7 +739,7 @@ async def onshape_feature_delete(name: str) -> str:
         return _format_error("onshape_feature_delete", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_features_delete_all() -> str:
     """Delete all features from the Part Studio tree."""
     try:
@@ -722,7 +750,7 @@ async def onshape_features_delete_all() -> str:
         return _format_error("onshape_features_delete_all", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_feature_revolve(angle_deg: float = 360.0) -> str:
     """Revolve the latest sketch region around an axis into a solid 3D part."""
     try:
@@ -733,7 +761,7 @@ async def onshape_feature_revolve(angle_deg: float = 360.0) -> str:
         return _format_error("onshape_feature_revolve", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_feature_edit(name: str) -> str:
     """Open an existing feature or sketch (e.g. 'Sketch 1') for editing."""
     try:
@@ -744,7 +772,7 @@ async def onshape_feature_edit(name: str) -> str:
         return _format_error("onshape_feature_edit", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_features_list() -> str:
     """List all features currently in the Part Studio tree."""
     try:
@@ -755,7 +783,7 @@ async def onshape_features_list() -> str:
         return _format_error("onshape_features_list", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_undo() -> str:
     """Undo the last action in Onshape."""
     try:
@@ -766,7 +794,7 @@ async def onshape_undo() -> str:
         return _format_error("onshape_undo", e)
 
 
-@mcp.tool()
+@cad_tool()
 async def onshape_redo() -> str:
     """Redo the last undone action in Onshape."""
     try:
@@ -777,13 +805,123 @@ async def onshape_redo() -> str:
         return _format_error("onshape_redo", e)
 
 
+async def _interactive_lazy() -> InteractiveSession:
+    global _interactive
+    if _interactive is None:
+        _interactive = InteractiveSession(await _driver_lazy(), settings.journal_dir / "interactive")
+    return _interactive
+
+
+async def _workflow_call(
+    command: Literal["begin", "next", "pause", "resume", "revise", "handoff", "cancel", "undo", "status", "restore"],
+    request_id: str = "", goal: str = "", steps: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Interactive UI workflow. Begin with stable request_id and explicit {tool,args,space} steps.
+    next executes ONE step and returns its frame; pause stops at action boundaries.
+    revise replaces remaining steps (e.g. after a new selection). handoff lets the user edit,
+    resume inspects their changes. cancel retains geometry. undo verifies one sketch transaction.
+    Completed execution is not proof of exact geometry: use onshape_verify_dimension.
+    """
+    if command == "pause":
+        return _interactive.pause() if _interactive else {"ok": True, "phase": "idle"}
+    async with _tool_lock:
+        try:
+            session = await _interactive_lazy()
+            if command == "restore":
+                return await session.restore(request_id)
+            if command == "begin":
+                return await session.begin(request_id, goal, steps or [])
+            if command == "next":
+                return await session.next()
+            if command == "revise":
+                if session.phase not in ("ready", "paused", "manual"):
+                    raise ValueError("Revise an active request, not a completed one")
+                return await session.revise(steps or [])
+            if command == "resume":
+                return await session.resume(steps)
+            if command == "handoff":
+                return await session.handoff()
+            if command == "cancel":
+                return await session.cancel()
+            if command == "undo":
+                return await session.undo()
+            return {"ok": True, "observation": await session.observe(), "request": session.current}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "phase": _interactive.phase if _interactive else "idle"}
+
+
+def _visual_result(result: dict[str, Any]) -> list[TextContent | ImageContent]:
+    content: list[TextContent | ImageContent] = [TextContent(type="text", text=json.dumps(result))]
+    shot = result.get("screenshot") or result.get("observation", {}).get("screenshot")
+    if not shot:
+        shot = result.get("request", {}).get("after", {}).get("screenshot")
+    if shot and __import__("pathlib").Path(shot).is_file():
+        content.append(Image(path=shot).to_image_content())
+    return content
+
+
+@mcp.tool()
+async def onshape_workflow(
+    command: Literal["begin", "next", "pause", "resume", "revise", "handoff", "cancel", "undo", "status", "restore"],
+    request_id: str = "", goal: str = "", steps: list[dict[str, Any]] | None = None,
+) -> list[TextContent | ImageContent]:
+    """Visible, one-step-at-a-time UI editing. Returns JSON evidence plus an inline frame.
+    begin accepts a stable request_id and steps [{tool,args,space}]. next runs ONE step.
+    pause is action-boundary; revise replaces pending steps; handoff/resume synchronize manual edits.
+    restore recovers a paused request after restart without replaying uncertain actions.
+    cancel retains geometry; undo attempts one checkpoint-verified native sketch undo.
+    status lists persisted entities/constraints. Completion is execution, not precision verification.
+    """
+    return _visual_result(await _workflow_call(command, request_id, goal, steps))
+
+
+@mcp.tool()
+async def onshape_frame() -> list[TextContent | ImageContent]:
+    """Return an actual inline image of the shared canvas, not just a filesystem path.
+    Use workflow status to obtain the latest frame_id for point-and-talk selection.
+    """
+    async with _tool_lock:
+        frame = await (await _interactive_lazy()).frame()
+        return [TextContent(type="text", text=json.dumps(frame)), Image(path=frame["screenshot"]).to_image_content()]
+
+
+@mcp.tool()
+async def onshape_select_target(label: str, x: float, y: float, frame_id: str,
+                                feature_id: str | None = None, entity_id: str | None = None) -> list[TextContent | ImageContent]:
+    """Preview a named screen target from the latest frame. Coordinates are viewport pixels.
+    Ask the user to confirm the marker, then queue selection.edit with handle and confirmed=true.
+    Bind IDs from workflow status when available; never invent IDs or reuse a stale handle.
+    """
+    async with _tool_lock:
+        try:
+            return _visual_result(await (await _interactive_lazy()).select(label, x, y, frame_id, feature_id, entity_id))
+        except Exception as exc:
+            return _visual_result({"ok": False, "error": str(exc)})
+
+
+@mcp.tool()
+async def onshape_verify_dimension(feature_id: str, constraint_id: str, value_mm: float,
+                                    tolerance_mm: float = 0.001) -> dict[str, Any]:
+    """Read back a persisted length constraint by exact IDs and check its solver status.
+    Read-only API inspection; performs no FeatureScript and no geometry creation.
+    Uncommitted, missing or expression-valued dimensions are not reported as verified.
+    """
+    async with _tool_lock:
+        try:
+            return verify_dimension(await read_features(await _driver_lazy()), feature_id,
+                                    constraint_id, value_mm, tolerance_mm)
+        except Exception as exc:
+            return {"ok": False, "verified": False, "error": str(exc)}
+
+
 # Lifecycle
 
 
 async def _cleanup() -> None:
-    global _driver, _vision, _loop
-    if _loop is not None:
-        await _loop.close()
+    global _driver, _vision, _loop, _interactive
+    # Loop borrows the shared resources. Close each owner exactly once.
+    _loop = None
+    _interactive = None
     if _vision is not None:
         await _vision.close()
     if _driver is not None:
@@ -799,6 +937,15 @@ def main() -> None:
     import sys
 
     # Quick dispatch for setup wizard or login
+    # One command that preflights everything and then serves. Prefer this
+    # over `share`: it clears stale servers and orphaned tunnels, and
+    # proves the Onshape session works before printing a URL.
+    if len(sys.argv) >= 2 and sys.argv[1] == "up":
+        from .up import main as run_up
+
+        run_up()
+        return
+
     if len(sys.argv) >= 2 and sys.argv[1] == "setup":
         from .setup import main as run_setup
 

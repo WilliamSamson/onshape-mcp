@@ -90,6 +90,7 @@ TOOL_DISPATCH: dict[str, Any] = {
     "feature.list": lambda d, a: ui_actions.features_list(d),
     "document.undo": lambda d, a: ui_actions.doc_undo(d),
     "document.redo": lambda d, a: ui_actions.doc_redo(d),
+    "view.zoom": lambda d, a: ui_actions.view_zoom(d, float(a["x"]), float(a["y"]), float(a["delta_y"])),
     "view.fit": lambda d, a: ui_actions.view_fit(d),
     "view.top": lambda d, a: ui_actions.view_top(d),
     "view.front": lambda d, a: ui_actions.view_front(d),
@@ -112,6 +113,7 @@ TOOL_DISPATCH: dict[str, Any] = {
         height=_dim_val(a, "height"),
         quadrant=a.get("quadrant"),
         centered=a.get("centered") or a.get("center") or a.get("at_origin"),
+        auto_dimension=a.get("auto_dimension", True),
     ),
     "sketch.circle": lambda d, a: ui_actions.sketch_circle(
         d,
@@ -120,6 +122,7 @@ TOOL_DISPATCH: dict[str, Any] = {
         else None,
         _dim_val(a, "radius"),
         centered=a.get("centered") or a.get("center") or a.get("at_origin"),
+        auto_dimension=a.get("auto_dimension", True),
     ),
     "sketch.line": lambda d, a: ui_actions.sketch_line(
         d, _xy(a, "p1_x", "p1_y"), _xy(a, "p2_x", "p2_y")
@@ -367,7 +370,7 @@ def build_agent_system_prompt() -> str:
         "  3. Sizing:\n"
         '     - `sketch.rectangle` accepts `width` and `height` (e.g. width="12 cm", height="8 cm" or width_mm=50).\n'
         "     - It automatically applies constraints and drives the Onshape dimension solver for both width and height!\n"
-        "     - After calling `sketch.rectangle` with width and height, both dimensions are ALREADY applied, so call `sketch.exit` next!\n"
+        "     - After `sketch.rectangle`, inspect dimensions_driven and ok. Commit only when appropriate; read back persisted dimensions before claiming exact sizing.\n"
         '     - Alternatively, call `sketch.dimension` with the entity coordinate and `value` (e.g. "5 cm").\n'
         "  4. `sketch.exit`: Commits and closes the sketch dialog.\n"
         "  5. `feature.extrude`: Extrudes the sketch with `depth` in mm or cm.\n\n"
@@ -381,6 +384,6 @@ def build_agent_system_prompt() -> str:
         "## Be conservative\n\n"
         "When in doubt, take a screenshot and re-look. The UI is fragile: wrong "
         "clicks can deselect, dismiss dialogs, or trigger unrelated tools. If a "
-        "tool fails twice in a row, undo and try a different approach.\n\n"
+        "tool fails, inspect its partial result; do not blindly repeat creation or undo unrelated edits.\n\n"
         "## Available tools\n\n" + datasheet.as_prompt_block()
     )
