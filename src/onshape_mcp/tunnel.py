@@ -7,10 +7,13 @@ Allows web AIs (ChatGPT Web, LibreChat, Open WebUI) to connect instantly.
 
 from __future__ import annotations
 
+import json
 import re
 import secrets
 import shutil
+import socket
 import subprocess
+import sys
 import threading
 import time
 from typing import Any
@@ -45,12 +48,23 @@ def require_token(app: Any, token: str) -> Any:
             qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
             supplied = (qs.get("token") or [""])[0]
         if not secrets.compare_digest(supplied, token):
+            # Spell out what to do. A bare 401 on "/" (which browsers and
+            # favicon requests hit constantly) reads like a broken server.
+            body = json.dumps({
+                "error": "unauthorized",
+                "hint": "Append ?token=<your MCP_TOKEN> to the URL, or send "
+                        "an 'Authorization: Bearer <token>' header.",
+                "endpoint": "MCP clients connect to /sse, not /",
+            }).encode()
             await send({
                 "type": "http.response.start",
                 "status": 401,
-                "headers": [(b"content-type", b"application/json")],
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
             })
-            await send({"type": "http.response.body", "body": b'{"error":"unauthorized"}'})
+            await send({"type": "http.response.body", "body": body})
             return
         await app(scope, receive, send)
 
@@ -81,14 +95,38 @@ def find_tunnel_binary() -> tuple[str, list[str]] | None:
     return None
 
 
+def _port_is_free(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+            return True
+        except OSError:
+            return False
+
+
 def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
     """Start the MCP SSE server and attach an auto-tunnel for web AIs."""
     # A tunnel puts this on the public internet. An unguessable URL is not
     # authentication, so mint a token if the user hasn't set one.
+    # stdout is block-buffered when piped, which swallows the banner below
+    # until the process exits — exactly when you need to read the URL.
+    sys.stdout.reconfigure(line_buffering=True)
+
+    pinned = bool(settings.mcp_token)
     token = settings.mcp_token or secrets.token_urlsafe(24)
     # Only the tunnel process needs to reach the server; binding the
     # loopback keeps it off the LAN as well.
     host = "127.0.0.1"
+
+    # Check before announcing anything. Otherwise a port clash prints a
+    # celebratory public URL for a server that never came up.
+    if not _port_is_free(host, port):
+        raise SystemExit(
+            f"Port {port} is already in use — another `onshape-mcp share` is probably running.\n"
+            f"Reuse that one, stop it with Ctrl+C, or pick another port:\n"
+            f"    onshape-mcp share --port {port + 1}"
+        )
 
     tunnel_info = find_tunnel_binary()
     if not tunnel_info:
@@ -161,9 +199,15 @@ def run_tunnel_and_server(port: int = 8000, host: str = "127.0.0.1") -> None:
         print("🎉 Your Onshape MCP is live on the internet:")
         print(f"\n👉 MCP SSE URL:  \033[1;32m{sse_url}\033[0m\n")
         print("This URL drives YOUR logged-in Onshape session. Treat it as a")
-        print("password: anyone who has it can edit your documents. It dies")
-        print("when you Ctrl+C, and a new token is minted each run unless you")
-        print("pin one with MCP_TOKEN in .env.\n")
+        print("password: anyone who has it can edit your documents.\n")
+        if pinned:
+            print("Token: pinned from MCP_TOKEN in .env (stable across restarts).")
+        else:
+            print("Token: freshly minted — set MCP_TOKEN in .env to keep it stable.")
+        print("Hostname: trycloudflare gives a NEW random hostname every run, so")
+        print("you must re-paste this URL into ChatGPT after each restart. Run")
+        print("`cloudflared tunnel --name <name>` with a Cloudflare-hosted domain")
+        print("if you want one permanent URL.\n")
         print("1. ChatGPT: Settings > Connectors > Add, paste the full URL.")
         print("2. LibreChat / Open WebUI: add it under MCP servers.")
         print("=" * 68 + "\n")

@@ -815,8 +815,16 @@ def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] in ("share", "tunnel"):
         from .tunnel import run_tunnel_and_server
 
-        port = int(os.environ.get("PORT", os.environ.get("MCP_PORT", "8000")))
-        run_tunnel_and_server(port=port)
+        share_parser = argparse.ArgumentParser(prog="onshape-mcp share")
+        share_parser.add_argument(
+            "--port",
+            type=int,
+            default=int(os.environ.get("PORT", os.environ.get("MCP_PORT", "8000"))),
+            help="Local port for the SSE server (default: 8000). Change it to run "
+            "a second tunnel alongside one that's already up.",
+        )
+        share_args, _ = share_parser.parse_known_args(sys.argv[2:])
+        run_tunnel_and_server(port=share_args.port)
         return
 
     parser = argparse.ArgumentParser(description="Onshape MCP Server")
