@@ -1178,9 +1178,17 @@ async def sketch_create(
     listing = await features_list(d)
     all_features = listing.meta.get("features", [])
 
+    # The commit result was previously discarded, so a sketch that failed
+    # to commit still reported ok=True with the dialog left open.
+    ok = exit_res.ok and all(s.get("ok", False) for s in created_shapes)
+    note = (
+        f"Created sketch on {plane} with {len(created_shapes)} shape(s)"
+        if ok
+        else f"Sketch on {plane} incomplete: {exit_res.note}"
+    )
     r = Result(
-        True,
-        f"Created sketch on {plane} with {len(created_shapes)} shape(s)",
+        ok,
+        note,
         shot,
         {"shapes": created_shapes, "features": all_features, "plane": plane, "name": name},
     )

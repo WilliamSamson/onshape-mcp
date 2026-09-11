@@ -1,8 +1,7 @@
 """Tests for the intent parser (no LLM, no Onshape, pure logic)."""
 
-import pytest
 
-from onshape_mcp.intent import Plan, parse
+from onshape_mcp.intent import parse
 
 
 class TestRectangle:

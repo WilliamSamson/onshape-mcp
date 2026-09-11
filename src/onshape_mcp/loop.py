@@ -92,8 +92,9 @@ class AgentLoop:
         history: list[dict[str, Any]] = []
 
         # Maintain a single chat session for this task run to prevent
-        # spawning multiple separate chats per step.
-        chat_session = await v.new_session()
+        # spawning multiple separate chats per step. The session is stored
+        # on the client, so the return value is not needed here.
+        await v.new_session()
 
         last_vertex: tuple[float, float] | None = None
 

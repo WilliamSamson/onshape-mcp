@@ -1,6 +1,5 @@
 """Test all sketch tools, bindings, dispatch registrations, and intent parsing."""
 
-import pytest
 
 from onshape_mcp import dispatch, shortcuts, tools
 from onshape_mcp.intent import parse

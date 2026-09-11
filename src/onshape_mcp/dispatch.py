@@ -87,7 +87,6 @@ TOOL_DISPATCH: dict[str, Any] = {
     "sketch.m4_profile": lambda d, a: ui_actions.m4_profile_exact(
         d, float(a.get("length_mm", 20.0))
     ),
-    "feature.delete": lambda d, a: ui_actions.feature_delete(d, a["name"]),
     "feature.list": lambda d, a: ui_actions.features_list(d),
     "document.undo": lambda d, a: ui_actions.doc_undo(d),
     "document.redo": lambda d, a: ui_actions.doc_redo(d),
