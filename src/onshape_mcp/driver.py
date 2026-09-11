@@ -16,6 +16,8 @@ ops (sketch, extrude, fillet) live in ui_actions.py and compose these.
 
 from __future__ import annotations
 
+import sys
+
 import asyncio
 import json
 import os
@@ -80,7 +82,7 @@ class OnshapeDriver:
             except Exception as e:
                 if self.channel == "chrome":
                     raise
-                print(f"[driver] real Chrome unavailable ({e}); using bundled Chromium")
+                print(f"[driver] real Chrome unavailable ({e}); using bundled Chromium", file=sys.stderr)
                 try:
                     self._ctx = await self._pw.chromium.launch_persistent_context(
                         user_data_dir=str(self.profile_dir),
@@ -92,7 +94,7 @@ class OnshapeDriver:
                 except Exception as inner_e:
                     err_msg = str(inner_e).lower()
                     if "playwright install" in err_msg or "executable doesn't exist" in err_msg:
-                        print("[driver] Chromium executable missing. Installing via playwright...")
+                        print("[driver] Chromium executable missing. Installing via playwright...", file=sys.stderr)
                         import subprocess
                         import sys
                         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
@@ -117,7 +119,7 @@ class OnshapeDriver:
             except Exception as inner_e:
                 err_msg = str(inner_e).lower()
                 if "playwright install" in err_msg or "executable doesn't exist" in err_msg:
-                    print("[driver] Chromium executable missing. Installing via playwright...")
+                    print("[driver] Chromium executable missing. Installing via playwright...", file=sys.stderr)
                     import subprocess
                     import sys
                     subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
@@ -160,20 +162,20 @@ class OnshapeDriver:
                 import base64
                 decoded = base64.b64decode(env_cookies.strip()).decode("utf-8")
                 raw = json.loads(decoded)
-                print(f"[driver] successfully loaded {len(raw)} cookies from base64 env")
+                print(f"[driver] successfully loaded {len(raw)} cookies from base64 env", file=sys.stderr)
             except Exception:
                 try:
                     raw = json.loads(env_cookies)
-                    print(f"[driver] successfully loaded {len(raw)} cookies from json env")
+                    print(f"[driver] successfully loaded {len(raw)} cookies from json env", file=sys.stderr)
                 except Exception as e:
-                    print(f"[driver] failed parsing cookies from env: {e}")
+                    print(f"[driver] failed parsing cookies from env: {e}", file=sys.stderr)
 
         # 2. Local cookie file
         if not raw and self.cookie_file.exists():
             try:
                 raw = json.loads(self.cookie_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError) as e:
-                print(f"[driver] cookie file unreadable ({e}); ignoring")
+                print(f"[driver] cookie file unreadable ({e}); ignoring", file=sys.stderr)
 
         # 3. Auto-extract from available installed browsers
         if not raw:
@@ -215,17 +217,17 @@ class OnshapeDriver:
                             self.cookie_file.write_text(json.dumps(raw, indent=2), encoding="utf-8")
                             print(
                                 f"[driver] auto-synced {len(raw)} Onshape cookies from {browser_name} to {self.cookie_file.name}"
-                            )
+                            , file=sys.stderr)
                             break
                     except Exception:
                         continue
             except Exception as e:
-                print(f"[driver] could not extract Onshape cookies from local browsers: {e}")
+                print(f"[driver] could not extract Onshape cookies from local browsers: {e}", file=sys.stderr)
         if not raw:
             return
         # Playwright's add_cookies wants the same shape it returns.
         await self._ctx.add_cookies(raw)
-        print(f"[driver] loaded {len(raw)} cookies from {self.cookie_file.name}")
+        print(f"[driver] loaded {len(raw)} cookies from {self.cookie_file.name}", file=sys.stderr)
 
     async def save_cookies(self) -> int:
         """Dump current context cookies to self.cookie_file. Returns count."""
@@ -444,10 +446,10 @@ async def login_interactive() -> None:
     d = OnshapeDriver()
     await d.start(headless=False)
     await d.open(ONSHAPE_URL)
-    print("Log into Onshape in the opened browser, then press Enter here.")
+    print("Log into Onshape in the opened browser, then press Enter here.", file=sys.stderr)
     input("> ")
     n = await d.save_cookies()
-    print(f"Saved {n} cookies to {d.cookie_file}")
+    print(f"Saved {n} cookies to {d.cookie_file}", file=sys.stderr)
     await d.close()
 
 
@@ -458,7 +460,7 @@ def main() -> None:
     if len(sys.argv) >= 2 and sys.argv[1] == "login":
         asyncio.run(login_interactive())
     else:
-        print("usage: python -m onshape_mcp.driver login")
+        print("usage: python -m onshape_mcp.driver login", file=sys.stderr)
 
 
 if __name__ == "__main__":

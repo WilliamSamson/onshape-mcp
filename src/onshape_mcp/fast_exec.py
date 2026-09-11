@@ -7,6 +7,8 @@ Typical execution: ~5-8s for sketch + dimension + commit, compared to
 
 from __future__ import annotations
 
+import sys
+
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,19 +68,19 @@ async def execute(d: OnshapeDriver, plan: Plan) -> FastResult:
             result.action_results.append({"tool": tool, "result": recorded})
             elapsed = time.monotonic() - step_t0
             result.step_times.append((f"{tool}({_compact(args)})", elapsed))
-            print(f"  [{i}] {tool}({_compact(args)}) ({elapsed:.1f}s)", flush=True)
+            print(f"  [{i}] {tool}({_compact(args)}) ({elapsed:.1f}s)", flush=True, file=sys.stderr)
         except Exception as e:
             elapsed = time.monotonic() - step_t0
             result.step_times.append((f"{tool} ERROR", elapsed))
             result.ok = False
             result.error = f"{tool}: {e}"
-            print(f"  [{i}] {tool} ERROR: {e} ({elapsed:.1f}s)", flush=True)
+            print(f"  [{i}] {tool} ERROR: {e} ({elapsed:.1f}s)", flush=True, file=sys.stderr)
             break
 
     try:
         result.final_screenshot = await d.screenshot("task_final.png")
     except Exception as e:
-        print(f"  [warn] could not capture final screenshot: {e}", flush=True)
+        print(f"  [warn] could not capture final screenshot: {e}", flush=True, file=sys.stderr)
     result.total_elapsed_s = time.monotonic() - t0
     return result
 

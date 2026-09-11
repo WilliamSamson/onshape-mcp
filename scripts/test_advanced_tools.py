@@ -81,7 +81,7 @@ async def test_offset(d: OnshapeDriver) -> bool:
     # Start sketch on Top plane
     await ui_actions.sketch_start(d, plane_name="Top")
     # Draw circle centered at origin with radius 40mm
-    r_circ = await ui_actions.sketch_circle(d, centered=True, radius_px=50.0)
+    r_circ = await ui_actions.sketch_circle(d, centered=True, radius_mm=15.0)
     print(f"  Circle action: ok={r_circ.ok}")
     # Offset circle
     cx, cy = await ui_actions.get_canvas_origin(d)
@@ -110,7 +110,7 @@ async def test_mirror(d: OnshapeDriver) -> bool:
 
     # 2. Draw a circle on the left side: center at (-60, 0), radius 25mm
     circle_center = (-60.0, 0.0)
-    r_circ = await ui_actions.sketch_circle(d, center=circle_center, radius_px=35.0)
+    r_circ = await ui_actions.sketch_circle(d, center=circle_center, radius_mm=10.0)
     print(f"  Left circle drawn: ok={r_circ.ok}")
 
     # 3. Mirror across centerline

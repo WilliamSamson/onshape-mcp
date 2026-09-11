@@ -72,6 +72,14 @@ class Settings:
     # "auto" tries real Chrome first then bundled Chromium,
     # "chrome" requires real Chrome, "chromium" uses bundled Chromium only.
     browser_channel: str = os.getenv("ONSHAPE_BROWSER_CHANNEL", "auto")
+    # Drawing-scale calibration knob. Empty = derive from canvas height
+    # (see ui_actions.px_per_mm). Set a number to pin it when your zoom
+    # level differs from Onshape's default new-sketch fit.
+    px_per_mm_override: str = os.getenv("ONSHAPE_PX_PER_MM", "")
+    # Shared secret required on the SSE transport. Empty = no auth, which
+    # is only safe on loopback. `onshape-mcp share` refuses to expose an
+    # unauthenticated server to the internet.
+    mcp_token: str = os.getenv("MCP_TOKEN", "")
 
     def __repr__(self) -> str:  # never leak cookie/profile paths into logs
         return (

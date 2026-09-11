@@ -15,6 +15,8 @@ because the image-upload path validates against more cookies.
 
 from __future__ import annotations
 
+import sys
+
 import asyncio
 import json
 from pathlib import Path
@@ -77,7 +79,7 @@ class GeminiWeb:
             self._client = client
             return
         except Exception as e:
-            print(f"[vision] live browser session init note ({e}); trying cookie file")
+            print(f"[vision] live browser session init note ({e}); trying cookie file", file=sys.stderr)
 
         # Fallback to explicit cookie file if browser-cookie3 could not read Chrome
         if self._has_cookie_file():
@@ -103,7 +105,7 @@ class GeminiWeb:
         try:
             cj = browser_cookie3.chrome(domain_name="google.com")
         except Exception as e:
-            print(f"[vision] could not read Chrome cookies: {e}")
+            print(f"[vision] could not read Chrome cookies: {e}", file=sys.stderr)
             return False
         psid = psidts = None
         for c in cj:
@@ -149,10 +151,10 @@ class GeminiWeb:
         try:
             await self._client.delete_chat(cid)
             self.created_chat_ids.discard(cid)
-            print(f"[vision] deleted chat {cid}")
+            print(f"[vision] deleted chat {cid}", file=sys.stderr)
             return True
         except Exception as e:
-            print(f"[vision] failed to delete chat {cid}: {e}")
+            print(f"[vision] failed to delete chat {cid}: {e}", file=sys.stderr)
             return False
 
     async def list_chats(self) -> list[Any]:
@@ -162,7 +164,7 @@ class GeminiWeb:
             res = self._client.list_chats()
             return res or []
         except Exception as e:
-            print(f"[vision] failed to list chats: {e}")
+            print(f"[vision] failed to list chats: {e}", file=sys.stderr)
             return []
 
     async def cleanup_created_chats(self) -> int:
@@ -216,7 +218,7 @@ class GeminiWeb:
             except Exception as e:
                 last_err = e
                 if "UNAUTHENTICATED" in str(e) or "Permission" in str(e):
-                    print(f"[vision] auth error on attempt {attempt + 1}: {e}")
+                    print(f"[vision] auth error on attempt {attempt + 1}: {e}", file=sys.stderr)
                     try:
                         await self._client.close()
                     except Exception:
@@ -224,11 +226,11 @@ class GeminiWeb:
                     self._client = None
                     self._active_session = None
                     if attempt == 0:
-                        print("[vision] re-extracting cookies from Chrome")
+                        print("[vision] re-extracting cookies from Chrome", file=sys.stderr)
                         if not await self._refresh_cookies_from_chrome():
                             print(
                                 "[vision] cookie refresh failed; will retry with whatever we have"
-                            )
+                            , file=sys.stderr)
                         continue
                 raise
         raise last_err if last_err else RuntimeError("vision: unknown failure")
@@ -238,7 +240,7 @@ class GeminiWeb:
             try:
                 await self.cleanup_created_chats()
             except Exception as e:
-                print(f"[vision] error during auto-cleanup: {e}")
+                print(f"[vision] error during auto-cleanup: {e}", file=sys.stderr)
         self._active_session = None
         if self._client is not None:
             try:

@@ -13,11 +13,22 @@ talk to it. Every action is journaled, so I can undo, replay, or branch.
 ## Status
 
 - **M0** done: scaffold, smoke tests, public repo, safety rails.
-- **M1** done: driver primitives, Onshape tool datasheet, 10 wired tools
-  (`view.fit`, `sketch.start/rectangle/circle/line/exit`, `feature.extrude/fillet/chamfer`,
-  `select.face/edge`, `ui.undo/redo`), closed-loop `act(goal)` agent.
+- **M1** done: driver primitives, Onshape tool datasheet, 43 MCP tools across
+  sketching, constraints, dimensions, features and feature-tree editing, plus
+  the closed-loop `act(goal)` agent and a deterministic fast path that skips
+  the LLM entirely for parseable goals.
 - **M2** next: pattern, mirror_body, assembly.mate, sketch.constrain flyout,
   journal-replay undo, a real perceptual-diff for the stuck detector.
+
+## A note on sizes
+
+Sizes come from Onshape's dimension solver, not from pixel measurements.
+Tools draw a rough shape at a scale derived from the live canvas, then drive
+the true millimetre value in — so a rectangle or circle is exactly the size
+you asked for regardless of zoom. All dimension arguments are millimetres
+unless you write a unit (`"10 cm"`, `"2 in"`); bare numbers are never
+reinterpreted. Polygon radius is currently drawn-to-scale but not
+solver-driven; see the `ponytail:` note in `ui_actions.py`.
 
 ## What it looks like from the client side
 
@@ -56,15 +67,41 @@ Restart Claude Desktop, and you can immediately ask:
 ## Local Development & Manual Run
 
 ```bash
-# Clone and install
 git clone https://github.com/WilliamSamson/onshape-mcp.git
 cd onshape-mcp
 uv sync
-
-# Run the smart setup or start server
 uv run onshape-mcp setup
 uv run onshape-mcp
 ```
+
+## Testing against a live ChatGPT session, without redeploying
+
+The Hugging Face Space is for other people. For your own iteration, run the
+server locally and tunnel it — ChatGPT connects to your working tree, so a
+code change only needs a restart, not a Space rebuild.
+
+```bash
+uv run onshape-mcp share
+```
+
+That prints a URL like `https://<random>.trycloudflare.com/sse?token=<token>`.
+Paste it into ChatGPT under **Settings → Connectors → Add**. The tunnel drives
+the browser on *your* machine with *your* Onshape session, so you see each
+action happen live.
+
+Two things worth knowing:
+
+- **The URL is a credential.** Anyone holding it can edit your Onshape
+  documents. A token is minted per run and the whole thing dies on Ctrl+C. Pin
+  a stable one with `MCP_TOKEN` in `.env` if you'd rather not re-paste the URL
+  into ChatGPT after every restart.
+- **Restart to pick up code changes.** Ctrl+C and re-run. With `MCP_TOKEN`
+  pinned, the path stays valid but the `trycloudflare.com` hostname is new each
+  run; `cloudflared tunnel --name` gives you a stable hostname if that churn
+  gets annoying.
+
+The Space (`deploy_hf/`) installs this package from git rather than vendoring a
+copy of `src/`, and requires its own `MCP_TOKEN` secret before it will start.
 
 ## A note on Google + automated browsers
 

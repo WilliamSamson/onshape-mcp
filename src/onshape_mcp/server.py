@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import traceback
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -18,7 +17,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from . import tools as datasheet
 from . import ui_actions
-from .dispatch import TOOL_DISPATCH, build_agent_system_prompt, dispatch
+from .dispatch import TOOL_DISPATCH, dispatch
 from .driver import OnshapeDriver
 from .fast_exec import execute as fast_execute
 from .intent import parse as parse_intent
@@ -129,12 +128,6 @@ async def open_doc(url: str) -> str:
 
 
 @mcp.tool()
-async def open_document(url: str) -> str:
-    """Navigate to an Onshape document URL or path (alias for open_doc)."""
-    return await open_doc(url=url)
-
-
-@mcp.tool()
 async def viewport_size() -> str:
     """Return the current viewport dimensions in pixels."""
     try:
@@ -194,7 +187,7 @@ async def onshape_view_iso() -> str:
 async def onshape_create_sketch(
     plane: str = "Top",
     name: str | None = None,
-    shapes: list[dict[str, Any]] = [],
+    shapes: list[dict[str, Any]] | None = None,
 ) -> str:
     """Create a complete 2D sketch with one or more shapes/entities on a plane.
 
@@ -214,20 +207,10 @@ async def onshape_create_sketch(
     """
     try:
         d = await _driver_lazy()
-        res = await ui_actions.sketch_create(d, plane=plane, name=name, shapes=shapes)
+        res = await ui_actions.sketch_create(d, plane=plane, name=name, shapes=shapes or [])
         return json.dumps(res.to_dict())
     except Exception as e:
         return _format_error("onshape_create_sketch", e)
-
-
-@mcp.tool()
-async def onshape_sketch(
-    plane: str = "Top",
-    name: str | None = None,
-    shapes: list[dict[str, Any]] = [],
-) -> str:
-    """Create a complete 2D sketch (alias for onshape_create_sketch)."""
-    return await onshape_create_sketch(plane=plane, name=name, shapes=shapes)
 
 
 @mcp.tool()
@@ -288,15 +271,16 @@ async def onshape_sketch_rectangle(
 async def onshape_sketch_circle(
     center_x: float | None = None,
     center_y: float | None = None,
-    radius_px: float = 50.0,
+    radius_mm: float = 20.0,
     centered: bool | None = None,
 ) -> str:
-    """Draw a circle. Pass center coordinates (center_x, center_y) or centered=True for origin."""
+    """Draw a circle of radius_mm. Pass center coordinates in mm (center_x, center_y)
+    or centered=True for the origin. The radius is driven into Onshape's solver."""
     try:
         d = await _driver_lazy()
         center = (center_x, center_y) if center_x is not None and center_y is not None else None
         return json.dumps(
-            (await ui_actions.sketch_circle(d, center, radius_px, centered=centered)).to_dict()
+            (await ui_actions.sketch_circle(d, center, radius_mm, centered=centered)).to_dict()
         )
     except Exception as e:
         return _format_error("sketch.circle", e)
@@ -315,7 +299,7 @@ async def onshape_sketch_line(p1_x: float, p1_y: float, p2_x: float, p2_y: float
 @mcp.tool()
 async def onshape_sketch_polygon(
     sides: int = 6,
-    radius: float = 60.0,
+    radius_mm: float = 25.0,
     center_x: float | None = None,
     center_y: float | None = None,
     circumscribed: bool = False,
@@ -327,7 +311,7 @@ async def onshape_sketch_polygon(
         return json.dumps(
             (
                 await ui_actions.sketch_polygon(
-                    d, center=center, radius=radius, sides=sides, circumscribed=circumscribed
+                    d, center=center, radius_mm=radius_mm, sides=sides, circumscribed=circumscribed
                 )
             ).to_dict()
         )
@@ -627,26 +611,10 @@ async def act(goal: str, max_steps: int = 25) -> str:
             d = await _driver_lazy()
             await d.open(url_match.group(0))
 
-        # Listing is a deterministic inspection operation. Sending it to the
-        # vision fallback is both slower and wrong: it made a simple feature-tree
-        # query depend on Gemini being installed and authenticated.
-        lower_goal = goal.lower()
-        if any(word in lower_goal for word in ("list", "show", "existing")) and any(
-            word in lower_goal for word in ("feature", "features", "sketch", "sketches")
-        ):
-            d = d or await _driver_lazy()
-            listed = await ui_actions.features_list(d)
-            return json.dumps(
-                {
-                    "ok": listed.ok,
-                    "mode": "deterministic_inspection",
-                    "features": listed.meta.get("features", []),
-                    "summary": listed.note,
-                },
-                indent=2,
-            )
-
-        # 1. Try fast path first
+        # 1. Try fast path first. Intent routing (including deterministic
+        # inspection like "list features") lives entirely in intent.py —
+        # a second substring router here disagreed with it on goals that
+        # matched both, e.g. "delete all features and show me a circle".
         plan = parse_intent(goal)
         if plan is not None:
             d = d or await _driver_lazy()
@@ -744,12 +712,6 @@ async def onshape_feature_delete(name: str) -> str:
 
 
 @mcp.tool()
-async def onshape_delete(name: str) -> str:
-    """Delete a feature or sketch by name (alias for onshape_feature_delete)."""
-    return await onshape_feature_delete(name)
-
-
-@mcp.tool()
 async def onshape_features_delete_all() -> str:
     """Delete all features from the Part Studio tree."""
     try:
@@ -761,12 +723,6 @@ async def onshape_features_delete_all() -> str:
 
 
 @mcp.tool()
-async def onshape_delete_all() -> str:
-    """Delete all features from the Part Studio tree (alias for onshape_features_delete_all)."""
-    return await onshape_features_delete_all()
-
-
-@mcp.tool()
 async def onshape_feature_revolve(angle_deg: float = 360.0) -> str:
     """Revolve the latest sketch region around an axis into a solid 3D part."""
     try:
@@ -775,12 +731,6 @@ async def onshape_feature_revolve(angle_deg: float = 360.0) -> str:
         return json.dumps({"ok": res.ok, "message": res.note, "screenshot": str(res.screenshot) if res.screenshot else None})
     except Exception as e:
         return _format_error("onshape_feature_revolve", e)
-
-
-@mcp.tool()
-async def onshape_revolve(angle_deg: float = 360.0) -> str:
-    """Revolve the latest sketch region (alias for onshape_feature_revolve)."""
-    return await onshape_feature_revolve(angle_deg=angle_deg)
 
 
 @mcp.tool()
@@ -901,8 +851,28 @@ def main() -> None:
         return
 
     if args.transport == "sse":
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
+        from .config import settings
+        from .tunnel import serve_sse
+
+        # SSE binds a network socket into a browser holding the user's
+        # Onshape session. Loopback is fine unauthenticated; anything
+        # wider needs a token.
+        if args.host not in ("127.0.0.1", "localhost", "::1") and not settings.mcp_token:
+            sys.exit(
+                f"Refusing to serve SSE on {args.host} without authentication.\n"
+                "Set MCP_TOKEN in your .env (any random string), or bind --host 127.0.0.1,\n"
+                "or use `onshape-mcp share`, which mints a token for you."
+            )
+        try:
+            if settings.mcp_token:
+                serve_sse(args.host, args.port, settings.mcp_token)
+            else:
+                mcp.settings.host = args.host
+                mcp.settings.port = args.port
+                mcp.run(transport="sse")
+        finally:
+            asyncio.run(_cleanup())
+        return
 
     try:
         mcp.run(transport=args.transport)

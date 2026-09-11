@@ -234,19 +234,20 @@ def test_act_lists_features_without_gemini() -> None:
     from onshape_mcp.server import act
     from onshape_mcp.ui_actions import Result
 
+    listing = Result(True, "Found 2 features", meta={"features": ["Sketch 1", "Sketch 2"]})
     with (
         patch("onshape_mcp.server._driver_lazy", AsyncMock(return_value=object())),
-        patch(
-            "onshape_mcp.server.ui_actions.features_list",
-            AsyncMock(return_value=Result(True, "Found 2 features", extra={"features": ["Sketch 1", "Sketch 2"]})),
-        ),
+        patch("onshape_mcp.ui_actions.features_list", AsyncMock(return_value=listing)),
+        patch("onshape_mcp.ui_actions.screenshot_only", AsyncMock(return_value=listing)),
         patch("onshape_mcp.server._loop_lazy", AsyncMock()) as vision_fallback,
     ):
         result = json.loads(asyncio.run(act("list existing features")))
 
     assert result["ok"] is True
-    assert result["mode"] == "deterministic_inspection"
-    assert result["features"] == ["Sketch 1", "Sketch 2"]
+    # Listing routes through the intent parser's fast path, not a second
+    # substring router inside act().
+    assert result["mode"] == "fast_path"
+    assert result["action_results"][0]["result"]["features"] == ["Sketch 1", "Sketch 2"]
     vision_fallback.assert_not_awaited()
 
 

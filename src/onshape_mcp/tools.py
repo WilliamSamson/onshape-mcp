@@ -82,7 +82,7 @@ SKETCH_RECTANGLE_ALIGNED = ToolSpec(
 )
 SKETCH_CIRCLE = ToolSpec(
     name="sketch.circle",
-    purpose="Center point circle. Pass centered=true (for origin) or center=(x,y), radius=mm or radius_px.",
+    purpose="Center point circle. Pass centered=true (for origin) or center=(x,y), radius_mm (driven into the solver).",
     requires=["sketch.active=true"],
     next_steps=["sketch.dimension", "feature.extrude", "sketch.exit"],
     status="working",

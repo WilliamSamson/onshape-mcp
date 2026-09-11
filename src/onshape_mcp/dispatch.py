@@ -119,7 +119,7 @@ TOOL_DISPATCH: dict[str, Any] = {
         _xy(a, "center_x", "center_y", default=(0.0, 0.0))
         if ("center_x" in a or "center" in a or "x" in a)
         else None,
-        float(a.get("radius_px") or a.get("radius_mm") or a.get("radius", 50)),
+        _dim_val(a, "radius"),
         centered=a.get("centered") or a.get("center") or a.get("at_origin"),
     ),
     "sketch.line": lambda d, a: ui_actions.sketch_line(
@@ -145,7 +145,7 @@ TOOL_DISPATCH: dict[str, Any] = {
     "sketch.ellipse": lambda d, a: ui_actions.sketch_circle(
         d,
         _xy(a, "center_x", "center_y", default=(0.0, 0.0)),
-        float(a.get("radius", 50.0)),
+        _dim_val(a, "radius"),
     ),
     "sketch.arc": lambda d, a: ui_actions.sketch_arc(
         d,
@@ -174,7 +174,7 @@ TOOL_DISPATCH: dict[str, Any] = {
         _xy(a, "center_x", "center_y", default=(0.0, 0.0))
         if ("center_x" in a or "center" in a or "x" in a)
         else None,
-        radius=float(a.get("radius_px") or a.get("radius_mm") or a.get("radius", 60.0)),
+        radius_mm=_dim_val(a, "radius"),
         sides=int(a.get("sides", 6)),
         circumscribed=bool(a.get("circumscribed", False)),
     ),
@@ -313,17 +313,27 @@ TOOL_DISPATCH: dict[str, Any] = {
 }
 
 
-async def dispatch(d: OnshapeDriver, tool: str | None, args: dict[str, Any]) -> Any:
+async def dispatch(
+    d: OnshapeDriver, tool: str | None, args: dict[str, Any], space: str = "mm"
+) -> Any:
     """Route a tool call. Unknown tools raise a clear error so the agent
     loop records it as a failure and the LLM can recover on the next
     step instead of crashing the whole run.
+
+    `space` declares what the caller's coordinates mean: "mm" for CAD
+    millimetres (intent parser, sketch_create, MCP tool signatures) or
+    "px" for viewport pixels (the vision loop, which reads screenshots).
     """
     if not tool:
         return
     fn = TOOL_DISPATCH.get(tool)
     if fn is None:
         raise KeyError(f"unknown tool: {tool!r}. Available: {sorted(TOOL_DISPATCH.keys())}")
-    return await fn(d, args or {})
+    token = ui_actions.COORD_SPACE.set(space)
+    try:
+        return await fn(d, args or {})
+    finally:
+        ui_actions.COORD_SPACE.reset(token)
 
 
 def build_agent_system_prompt() -> str:

@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .config import settings
 from .driver import OnshapeDriver
 from .journal import JournalEntry, journal
 from .onshape_api import create_m4_profile
@@ -26,22 +29,13 @@ class Result:
     ok: bool
     note: str = ""
     screenshot: Path | None = None
-    extra: dict[str, Any] | None = None
-
-    @property
-    def summary(self) -> str:
-        return self.note
-
-    @property
-    def meta(self) -> dict[str, Any]:
-        return self.extra or {}
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"ok": self.ok, "note": self.note}
         if self.screenshot is not None:
             d["screenshot"] = str(self.screenshot)
-        if self.extra:
-            d.update(self.extra)
+        d.update(self.meta)
         return d
 
 
@@ -149,11 +143,14 @@ async def sketch_start(
         clicked = False
         if b.toolbar_text:
             clicked = await d.click_text(b.toolbar_text, timeout_ms=500)
+        if not clicked and b.keys:
+            await d.press_chord(*b.keys)
+            clicked = True
         if not clicked:
-            if b.keys:
-                await d.press_chord(*b.keys)
-            else:
-                await d.click(155.0, 58.0)
+            # Previously fell through to a hardcoded click at (155, 58),
+            # which silently hits whatever is at that pixel in a layout
+            # we don't recognise. Failing is the honest outcome.
+            return Result(False, "sketch.start: no Sketch button, toolbar text, or key binding found")
     # small settle delay for the UI to switch into plane-pick mode
     await asyncio.sleep(0.3)
 
@@ -182,12 +179,15 @@ async def sketch_start(
                 pass
             await d.press_key("n")
         else:
-            await d.click(65.0, 232.0)
-            await asyncio.sleep(0.4)
-            await d.press_key("n")
-    await asyncio.sleep(1.2)
-    await asyncio.sleep(0.8)
+            return Result(
+                False,
+                f"sketch.start: plane {target_name!r} not found in the feature tree",
+            )
     active_dialog = d.page.locator(".feature-dialog:not(.ns-dialog-default-hidden)")
+    try:
+        await active_dialog.first.wait_for(state="visible", timeout=5000)
+    except Exception:
+        pass
     if await active_dialog.count() == 0:
         shot = await d.screenshot("sketch_start_failed.png")
         r = Result(False, f"Onshape did not enter sketch mode on {target_name}", shot)
@@ -257,6 +257,43 @@ SKETCH_COMMAND_IDS: dict[str, str] = {
 }
 
 
+def _as_mm_str(val: float | str) -> str:
+    return f"{val:g} mm" if isinstance(val, (int, float)) else str(val)
+
+
+async def _enter_value(d: OnshapeDriver, val: float | str) -> str:
+    """Type a dimension into whatever Onshape input is live, then commit.
+
+    Onshape sometimes renders an `input.os-canvas-text-edit` and sometimes
+    takes raw keystrokes; this was copy-pasted in five places.
+    """
+    text = _as_mm_str(val)
+    dim_input = d.page.locator("input.os-canvas-text-edit")
+    if await dim_input.count() > 0:
+        await dim_input.first.fill(text)
+    else:
+        await d.type_text(text)
+    await asyncio.sleep(0.1)
+    await d.press_key("Enter")
+    await asyncio.sleep(0.3)
+    return text
+
+
+async def _commit_dialog(d: OnshapeDriver) -> bool:
+    """Click the green checkmark that commits a feature dialog."""
+    ok = d.page.locator(
+        ".ns-dialog-button-ok, .button-ok, button[aria-label*='check' i], button[title*='check' i]"
+    ).first
+    try:
+        if await ok.count() > 0 and await ok.is_visible():
+            await ok.click()
+            await asyncio.sleep(0.3)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def _activate_sketch_tool(d: OnshapeDriver, name: str) -> Result:
     """Activate a sketch tool via DOM command-id, keyboard shortcut, or text locator."""
     # 1. Try keyboard shortcut first if available (fastest, most reliable)
@@ -288,57 +325,123 @@ async def _activate_sketch_tool(d: OnshapeDriver, name: str) -> Result:
     return Result(False, f"{name}: no binding or visible tool button available")
 
 
-def _parse_dim_px(val: float | str | None, default_px: float = 120.0) -> float:
+def parse_mm(val: float | str | None, default_mm: float | None = None) -> float | None:
+    """Parse a dimension to millimetres. Bare numbers are millimetres —
+    the unit every tool signature and docstring in this package documents.
+
+    There is deliberately no magnitude-based unit guessing here: guessing
+    made a 10 that meant 10mm silently become 100mm.
+    """
     if val is None:
-        return default_px
-    try:
-        s = str(val).strip().lower()
-        num = float("".join(c for c in s if c.isdigit() or c == "."))
-        if "cm" in s:
-            px = num * 32.583
-        elif "mm" in s:
-            px = num * 3.2583
-        elif "in" in s or "inch" in s:
-            px = num * 82.75
-        elif num <= 25:
-            px = num * 32.583
-        else:
-            px = num * 3.2583
-        return max(40.0, min(550.0, px))
-    except Exception:
-        return default_px
+        return default_mm
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip().lower()
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    if not m:
+        return default_mm
+    num = float(m.group(0))
+    if "cm" in s:
+        return num * 10.0
+    if "in" in s:  # covers "in" and "inch"
+        return num * 25.4
+    if "m" in s and "mm" not in s:  # bare metres
+        return num * 1000.0
+    return num
 
 
 async def get_canvas_origin(d: OnshapeDriver) -> tuple[float, float]:
-    """Calculate the exact center point (origin) of the WebGL canvas.
-    Takes into account the left feature panel (246px) and toolbar (76px).
-    """
+    """Calculate the exact center point (origin) of the WebGL canvas."""
     try:
         box = await d.page.evaluate("""() => {
             const c = document.querySelector('canvas.os-main-canvas') || document.querySelector('canvas');
-            if (!c) return {cx: 843.0, cy: 473.0};
+            if (!c) return null;
             const r = c.getBoundingClientRect();
-            return {cx: r.x + r.width / 2.0, cy: r.y + r.height / 2.0};
+            return {cx: r.x + r.width / 2.0, cy: r.y + r.height / 2.0, h: r.height, w: r.width};
         }""")
-        return (float(box.get("cx", 843.0)), float(box.get("cy", 473.0)))
+        if box:
+            return (float(box["cx"]), float(box["cy"]))
     except Exception:
-        return (843.0, 473.0)
+        pass
+    return (843.0, 473.0)
 
 
-MM_TO_PX: float = 3.2583
+# Onshape's default fit for a fresh sketch shows roughly this much of the
+# model plane across the canvas height. Used only to pick pixels that land
+# somewhere sane on screen — never as a measurement. True sizes come from
+# sketch_dimension driving Onshape's solver.
+#
+# ponytail: assumes the default zoom. If the user has zoomed, drawn shapes
+# come out the wrong on-screen size (the driven dimension still corrects
+# them). Set ONSHAPE_PX_PER_MM to pin it, or upgrade to measuring a drawn
+# entity of known mm length and solving for the ratio.
+DEFAULT_VIEW_SPAN_MM: float = 276.0
+
+
+async def px_per_mm(d: OnshapeDriver) -> float:
+    """Pixels per millimetre for *drawing*, derived from the live canvas
+    height so it tracks the viewport instead of assuming 1440x900.
+    """
+    override = settings.px_per_mm_override.strip()
+    if override:
+        try:
+            return float(override)
+        except ValueError:
+            pass
+    try:
+        h = await d.page.evaluate("""() => {
+            const c = document.querySelector('canvas.os-main-canvas') || document.querySelector('canvas');
+            return c ? c.getBoundingClientRect().height : null;
+        }""")
+        if h:
+            return float(h) / DEFAULT_VIEW_SPAN_MM
+    except Exception:
+        pass
+    return 900.0 / DEFAULT_VIEW_SPAN_MM
+
+
+# Which space incoming coordinates are in. The vision loop reasons over
+# screenshots and can only speak viewport pixels; every other caller
+# (intent parser, sketch_create, the MCP tool signatures) speaks CAD mm.
+# Tagging it explicitly replaced a magnitude heuristic that silently read
+# a 300mm coordinate as pixels.
+COORD_SPACE: ContextVar[str] = ContextVar("coord_space", default="mm")
+
+
+@contextmanager
+def _px_space():
+    """Pass already-resolved viewport pixels into a nested ui_action
+    without it converting them a second time.
+    """
+    token = COORD_SPACE.set("px")
+    try:
+        yield
+    finally:
+        COORD_SPACE.reset(token)
 
 
 async def _ensure_viewport_coords(d: OnshapeDriver, pt: tuple[float, float]) -> tuple[float, float]:
-    x, y = pt
+    x, y = float(pt[0]), float(pt[1])
+    if COORD_SPACE.get() == "px":
+        return (x, y)
     cx, cy = await get_canvas_origin(d)
-    # If pt is (0, 0), return exact origin
     if x == 0 and y == 0:
         return (cx, cy)
-    # If coordinates are already in viewport pixel space (> 250px from origin)
-    if abs(x) > 250 or abs(y) > 250:
-        return (x, y)
-    # CAD Cartesian coordinates in mm: +X is right, +Y is up
-    return (cx + x * MM_TO_PX, cy - y * MM_TO_PX)
+    scale = await px_per_mm(d)
+    # CAD Cartesian coordinates in mm: +X is right, +Y is up (screen Y is down)
+    return (cx + x * scale, cy - y * scale)
+
+
+async def _span_px(d: OnshapeDriver, mm: float | None, default_mm: float) -> tuple[float, bool]:
+    """Convert a mm span to a drawable pixel span. Returns (px, clamped).
+
+    Clamping keeps the click on the canvas for very large or very small
+    parts; the caller reports it rather than silently resizing the part.
+    """
+    scale = await px_per_mm(d)
+    raw = (default_mm if mm is None else mm) * scale
+    px = max(40.0, min(550.0, abs(raw)))
+    return px, px != abs(raw)
 
 
 async def sketch_rectangle(
@@ -354,36 +457,34 @@ async def sketch_rectangle(
         return Result(False, "sketch.rectangle requires an active sketch")
 
     cx, cy = await get_canvas_origin(d)
-    span_x = _parse_dim_px(width, default_px=120.0)
-    span_y = _parse_dim_px(height, default_px=120.0)
+    w_mm = parse_mm(width)
+    h_mm = parse_mm(height)
+    span_x, clamp_x = await _span_px(d, w_mm, default_mm=36.0)
+    span_y, clamp_y = await _span_px(d, h_mm, default_mm=36.0)
 
-    if centered:
-        corner1 = (cx - span_x / 2.0, cy - span_y / 2.0)
-        corner2 = (cx + span_x / 2.0, cy + span_y / 2.0)
-    elif quadrant is not None:
-        q = str(quadrant).upper().strip()
-        if q in ("1", "I", "TOP-RIGHT", "NE"):
-            corner1 = (cx, cy)
-            corner2 = (cx + span_x, cy - span_y)
-        elif q in ("2", "II", "TOP-LEFT", "NW"):
-            corner1 = (cx, cy)
-            corner2 = (cx - span_x, cy - span_y)
-        elif q in ("3", "III", "BOTTOM-LEFT", "SW"):
-            corner1 = (cx, cy)
-            corner2 = (cx - span_x, cy + span_y)
-        elif q in ("4", "IV", "BOTTOM-RIGHT", "SE"):
-            corner1 = (cx, cy)
-            corner2 = (cx + span_x, cy + span_y)
-    elif corner1 is None and corner2 is None:
-        corner1 = (cx - span_x / 2.0, cy - span_y / 2.0)
-        corner2 = (cx + span_x / 2.0, cy + span_y / 2.0)
-
-    c1 = await _ensure_viewport_coords(
-        d, corner1 if corner1 is not None else (cx - 70.0, cy - 70.0)
-    )
-    c2 = await _ensure_viewport_coords(
-        d, corner2 if corner2 is not None else (cx + 70.0, cy + 70.0)
-    )
+    # Quadrant / centered anchor the rectangle relative to the on-screen
+    # origin, so those branches produce viewport pixels directly. Only
+    # caller-supplied corners go through the space conversion.
+    q = str(quadrant).upper().strip() if quadrant is not None else None
+    quad_signs = {
+        "1": (1, -1), "I": (1, -1), "TOP-RIGHT": (1, -1), "NE": (1, -1),
+        "2": (-1, -1), "II": (-1, -1), "TOP-LEFT": (-1, -1), "NW": (-1, -1),
+        "3": (-1, 1), "III": (-1, 1), "BOTTOM-LEFT": (-1, 1), "SW": (-1, 1),
+        "4": (1, 1), "IV": (1, 1), "BOTTOM-RIGHT": (1, 1), "SE": (1, 1),
+    }
+    if q in quad_signs:
+        sx, sy = quad_signs[q]
+        c1, c2 = (cx, cy), (cx + sx * span_x, cy + sy * span_y)
+    elif centered or (corner1 is None and corner2 is None):
+        c1 = (cx - span_x / 2.0, cy - span_y / 2.0)
+        c2 = (cx + span_x / 2.0, cy + span_y / 2.0)
+    else:
+        c1 = await _ensure_viewport_coords(
+            d, corner1 if corner1 is not None else (cx - span_x / 2.0, cy - span_y / 2.0)
+        )
+        c2 = await _ensure_viewport_coords(
+            d, corner2 if corner2 is not None else (cx + span_x / 2.0, cy + span_y / 2.0)
+        )
 
     t = await _activate_sketch_tool(d, "sketch.rectangle")
     if not t.ok:
@@ -406,32 +507,39 @@ async def sketch_rectangle(
     top_label = (top_pick[0], top_pick[1] - 45.0)
     left_label = (left_pick[0] - 55.0, left_pick[1])
 
-    # If width or height are specified, apply constraints and dimensions
-    if width is not None and height is not None and str(width).strip() == str(height).strip():
-        # Square: apply Equal constraint first so geometry is strictly equilateral
-        await sketch_equal(d, top_pick, left_pick)
-        await asyncio.sleep(0.5)
-        # Dimension top edge
-        await sketch_dimension(d, top_pick, top_label, width)
-    elif width is not None:
-        await sketch_dimension(d, top_pick, top_label, width)
-        if height is not None:
-            await asyncio.sleep(0.6)
-            await sketch_dimension(d, left_pick, left_label, height)
-    elif height is not None:
-        await sketch_dimension(d, left_pick, left_label, height)
+    # Drive the solver with the true mm values. The pixels above only had
+    # to land a rough rectangle on screen; these dimensions are what makes
+    # it the requested size.
+    with _px_space():
+        if w_mm is not None and h_mm is not None and w_mm == h_mm:
+            # Square: Equal constraint first so it stays strictly equilateral
+            await sketch_equal(d, top_pick, left_pick)
+            await asyncio.sleep(0.5)
+            await sketch_dimension(d, top_pick, top_label, w_mm)
+        elif w_mm is not None:
+            await sketch_dimension(d, top_pick, top_label, w_mm)
+            if h_mm is not None:
+                await asyncio.sleep(0.6)
+                await sketch_dimension(d, left_pick, left_label, h_mm)
+        elif h_mm is not None:
+            await sketch_dimension(d, left_pick, left_label, h_mm)
 
     shot = await d.screenshot("sketch_rectangle.png")
-    meta = {
+    meta: dict[str, Any] = {
         "corner1": list(c1),
         "corner2": list(c2),
         "last_vertex": list(c2),
-        "width": width,
-        "height": height,
+        "width_mm": w_mm,
+        "height_mm": h_mm,
         "quadrant": quadrant,
         "centered": centered,
     }
-    r = Result(True, f"rectangle {c1} -> {c2} (dim={width}x{height})", shot, meta)
+    if clamp_x or clamp_y:
+        meta["draw_scale_clamped"] = True
+    note = f"rectangle {w_mm}x{h_mm} mm"
+    if clamp_x or clamp_y:
+        note += " (drawn at clamped on-screen size; driven dimensions are exact)"
+    r = Result(True, note, shot, meta)
     _record("sketch.rectangle", meta, r)
     return r
 
@@ -439,29 +547,37 @@ async def sketch_rectangle(
 async def sketch_circle(
     d: OnshapeDriver,
     center: tuple[float, float] | None = None,
-    radius_px: float = 50.0,
+    radius_mm: float | str | None = None,
     centered: bool | None = None,
 ) -> Result:
     t = await _activate_sketch_tool(d, "sketch.circle")
     if not t.ok:
-        _record(
-            "sketch.circle", {"center": list(center) if center else None, "radius_px": radius_px}, t
-        )
+        _record("sketch.circle", {"radius_mm": radius_mm}, t)
         return t
     cx, cy = await get_canvas_origin(d)
-    if centered or center is None or center == (0, 0):
+    if centered or center is None or tuple(center) == (0, 0):
         c = (cx, cy)
     else:
         c = await _ensure_viewport_coords(d, center)
-    r_px = radius_px if radius_px > 10 else radius_px * 15.0
+    r_mm = parse_mm(radius_mm, default_mm=20.0)
+    r_px, clamped = await _span_px(d, r_mm, default_mm=20.0)
     await d.click(*c)
     await asyncio.sleep(0.1)
-    await d.click(c[0] + r_px, c[1])
+    edge = (c[0] + r_px, c[1])
+    await d.click(*edge)
     await asyncio.sleep(0.1)
     await d.press_key("Escape")
+    # The two clicks above only place a rough circle. Drive the real
+    # radius through the solver so the part is the requested size
+    # regardless of zoom.
+    with _px_space():
+        await sketch_dimension(d, edge, (edge[0] + 50.0, edge[1] - 50.0), f"{r_mm * 2:g} mm")
     shot = await d.screenshot("sketch_circle.png")
-    r = Result(True, f"circle center={c} r={r_px}", shot)
-    _record("sketch.circle", {"center": list(c), "radius_px": r_px}, r)
+    meta: dict[str, Any] = {"center": list(c), "radius_mm": r_mm}
+    if clamped:
+        meta["draw_scale_clamped"] = True
+    r = Result(True, f"circle r={r_mm}mm at {c}", shot, meta)
+    _record("sketch.circle", meta, r)
     return r
 
 
@@ -518,18 +634,7 @@ async def sketch_dimension(
     await d.page.mouse.click(*l_xy)
     await asyncio.sleep(0.4)
     # Type the new value into input.os-canvas-text-edit if present or directly
-    val_str = f"{value_mm} mm" if isinstance(value_mm, (int, float)) else str(value_mm)
-    dim_input = d.page.locator("input.os-canvas-text-edit")
-    if await dim_input.count() > 0:
-        await dim_input.first.fill(val_str)
-        await asyncio.sleep(0.1)
-        await d.page.keyboard.press("Enter")
-        await asyncio.sleep(0.4)
-    else:
-        await d.type_text(val_str)
-        await asyncio.sleep(0.1)
-        await d.press_key("Enter")
-        await asyncio.sleep(0.4)
+    val_str = await _enter_value(d, value_mm)
     # Esc to drop the dimension tool, stay in sketch
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_dimension.png")
@@ -607,11 +712,16 @@ async def sketch_arc(
 async def sketch_polygon(
     d: OnshapeDriver,
     center: tuple[float, float] | None = None,
-    radius: float = 60.0,
+    radius_mm: float | str | None = None,
     sides: int = 6,
     circumscribed: bool = False,
 ) -> Result:
-    """Draw an inscribed or circumscribed polygon."""
+    """Draw an inscribed or circumscribed polygon.
+
+    ponytail: the radius is drawn at scale but not dimension-driven —
+    Onshape dimensions a polygon through its construction circle, which
+    needs a second pick. Add that when polygon sizing has to be exact.
+    """
     tool_name = "sketch.polygon_circumscribed" if circumscribed else "sketch.polygon_inscribed"
     t = await _activate_sketch_tool(d, tool_name)
     if not t.ok:
@@ -620,20 +730,23 @@ async def sketch_polygon(
         return t
     cx, cy = await get_canvas_origin(d)
     c = await _ensure_viewport_coords(d, center) if center is not None else (cx, cy)
-    r_px = _parse_dim_px(radius, default_px=60.0)
+    r_mm = parse_mm(radius_mm, default_mm=25.0)
+    r_px, clamped = await _span_px(d, r_mm, default_mm=25.0)
     await d.click(*c)
     await asyncio.sleep(0.15)
     await d.click(c[0] + r_px, c[1])
     await asyncio.sleep(0.2)
-    # Type number of sides
     await d.type_text(str(int(sides)))
     await asyncio.sleep(0.1)
     await d.press_key("Enter")
     await asyncio.sleep(0.2)
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_polygon.png")
-    r = Result(True, f"{sides}-sided polygon at {c} r={r_px}", shot)
-    _record("sketch.polygon", {"center": list(c), "radius": r_px, "sides": sides}, r)
+    meta: dict[str, Any] = {"center": list(c), "radius_mm": r_mm, "sides": sides}
+    if clamped:
+        meta["draw_scale_clamped"] = True
+    r = Result(True, f"{sides}-sided polygon r={r_mm}mm at {c}", shot, meta)
+    _record("sketch.polygon", meta, r)
     return r
 
 
@@ -757,16 +870,7 @@ async def sketch_fillet(
     v = await _ensure_viewport_coords(d, vertex_xy)
     await d.click(*v)
     await asyncio.sleep(0.3)
-    val_str = f"{radius_mm} mm" if isinstance(radius_mm, (int, float)) else str(radius_mm)
-    dim_input = d.page.locator("input.os-canvas-text-edit")
-    if await dim_input.count() > 0:
-        await dim_input.first.fill(val_str)
-        await asyncio.sleep(0.1)
-        await d.press_key("Enter")
-    else:
-        await d.type_text(val_str)
-        await d.press_key("Enter")
-    await asyncio.sleep(0.3)
+    val_str = await _enter_value(d, radius_mm)
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_fillet.png")
     r = Result(True, f"fillet {val_str} at {v}", shot)
@@ -786,16 +890,7 @@ async def sketch_chamfer(
     v = await _ensure_viewport_coords(d, vertex_xy)
     await d.click(*v)
     await asyncio.sleep(0.3)
-    val_str = f"{distance_mm} mm" if isinstance(distance_mm, (int, float)) else str(distance_mm)
-    dim_input = d.page.locator("input.os-canvas-text-edit")
-    if await dim_input.count() > 0:
-        await dim_input.first.fill(val_str)
-        await asyncio.sleep(0.1)
-        await d.press_key("Enter")
-    else:
-        await d.type_text(val_str)
-        await d.press_key("Enter")
-    await asyncio.sleep(0.3)
+    val_str = await _enter_value(d, distance_mm)
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_chamfer.png")
     r = Result(True, f"chamfer {val_str} at {v}", shot)
@@ -867,16 +962,7 @@ async def sketch_offset(
     else:
         await d.click(p[0] + 20.0, p[1] + 20.0)
     await asyncio.sleep(0.2)
-    val_str = f"{distance_mm} mm" if isinstance(distance_mm, (int, float)) else str(distance_mm)
-    dim_input = d.page.locator("input.os-canvas-text-edit")
-    if await dim_input.count() > 0:
-        await dim_input.first.fill(val_str)
-        await asyncio.sleep(0.1)
-        await d.press_key("Enter")
-    else:
-        await d.type_text(val_str)
-        await d.press_key("Enter")
-    await asyncio.sleep(0.3)
+    val_str = await _enter_value(d, distance_mm)
     await d.press_key("Escape")
     shot = await d.screenshot("sketch_offset.png")
     r = Result(True, f"offset {val_str} at {p}", shot)
@@ -963,12 +1049,13 @@ async def sketch_exit(d: OnshapeDriver, commit: bool = True, **_kw) -> Result:
     """Exit and accept (or cancel) the active sketch."""
     before = await d.screenshot("sketch_exit_before.png")
     if commit:
-        # Click green checkmark button on dialog
+        # Green checkmark on the sketch dialog. No hardcoded-pixel
+        # fallback: clicking a guessed coordinate to "commit" can just as
+        # easily discard the sketch.
         ok_btn = d.page.locator(".ns-dialog-button-ok, .button-ok").first
-        if await ok_btn.count() > 0:
-            await ok_btn.click()
-        else:
-            await d.click(424.0, 93.0)
+        if await ok_btn.count() == 0:
+            return Result(False, "sketch.exit: commit button not found on the sketch dialog", before)
+        await ok_btn.click()
         await asyncio.sleep(0.8)
     else:
         cancel_btn = d.page.locator(".ns-dialog-button-cancel, .button-cancel").first
@@ -1023,30 +1110,27 @@ async def sketch_create(
             h = s.get("height_mm") or s.get("height") or w
             cx_val = float(s.get("center_x", 0.0))
             cy_val = float(s.get("center_y", 0.0))
-            w_mm = float(w) if isinstance(w, (int, float)) else _parse_dim_px(w) / MM_TO_PX
-            h_mm = float(h) if isinstance(h, (int, float)) else _parse_dim_px(h) / MM_TO_PX
+            w_mm = parse_mm(w, default_mm=50.0)
+            h_mm = parse_mm(h, default_mm=w_mm)
             if s.get("centered", True):
                 c1 = (cx_val - w_mm / 2.0, cy_val - h_mm / 2.0)
                 c2 = (cx_val + w_mm / 2.0, cy_val + h_mm / 2.0)
             else:
                 c1 = (cx_val, cy_val)
                 c2 = (cx_val + w_mm, cy_val + h_mm)
-            res = await sketch_rectangle(d, corner1=c1, corner2=c2, width=f"{w_mm:g} mm", height=f"{h_mm:g} mm")
+            res = await sketch_rectangle(d, corner1=c1, corner2=c2, width=w_mm, height=h_mm)
             created_shapes.append({"type": "rectangle", "ok": res.ok, "width_mm": w_mm, "height_mm": h_mm})
 
         elif stype in ("circle", "hole"):
             dia = s.get("diameter_mm") or s.get("diameter")
             rad = s.get("radius_mm") or s.get("radius")
             if dia is not None:
-                rad_mm = float(dia) / 2.0 if isinstance(dia, (int, float)) else _parse_dim_px(dia) / (2.0 * MM_TO_PX)
-            elif rad is not None:
-                rad_mm = float(rad) if isinstance(rad, (int, float)) else _parse_dim_px(rad) / MM_TO_PX
+                rad_mm = parse_mm(dia, default_mm=40.0) / 2.0
             else:
-                rad_mm = 20.0
+                rad_mm = parse_mm(rad, default_mm=20.0)
             cx_val = float(s.get("center_x", 0.0))
             cy_val = float(s.get("center_y", 0.0))
-            r_px = rad_mm * MM_TO_PX
-            res = await sketch_circle(d, center=(cx_val, cy_val), radius_px=r_px)
+            res = await sketch_circle(d, center=(cx_val, cy_val), radius_mm=rad_mm)
             created_shapes.append({"type": "circle", "ok": res.ok, "radius_mm": rad_mm, "center": [cx_val, cy_val]})
 
         elif stype in ("line", "segment"):
@@ -1069,11 +1153,10 @@ async def sketch_create(
 
         elif stype in ("polygon", "hex", "hexagon", "triangle"):
             sides = int(s.get("sides", 6))
-            rad = s.get("radius_mm") or s.get("radius", 25.0)
-            rad_mm = float(rad) if isinstance(rad, (int, float)) else _parse_dim_px(rad) / MM_TO_PX
+            rad_mm = parse_mm(s.get("radius_mm") or s.get("radius"), default_mm=25.0)
             cx_val = float(s.get("center_x", 0.0))
             cy_val = float(s.get("center_y", 0.0))
-            res = await sketch_polygon(d, center=(cx_val, cy_val), radius=rad_mm * MM_TO_PX, sides=sides)
+            res = await sketch_polygon(d, center=(cx_val, cy_val), radius_mm=rad_mm, sides=sides)
             created_shapes.append({"type": "polygon", "ok": res.ok, "sides": sides, "radius_mm": rad_mm})
 
         elif stype in ("arc",):
@@ -1161,6 +1244,7 @@ async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Re
          value with "mm" unit, press Enter.
       4. Click the green checkmark to commit the feature.
     """
+    depth_str = "default"
     # Step 1: pre-select the most recent sketch
     await _select_latest_sketch(d)
 
@@ -1181,43 +1265,24 @@ async def feature_extrude(d: OnshapeDriver, depth_mm: float | None = None) -> Re
         # as an input.os-canvas-text-edit. .fill() clears the field
         # first, then types the value with the unit suffix so Onshape
         # doesn't reinterpret it as the default unit (cm).
-        depth_str = f"{depth_mm:g} mm"
-        try:
-            depth_input = d.page.locator("input.os-canvas-text-edit").first
-            if await depth_input.count() > 0:
-                await depth_input.fill(depth_str)
-            else:
-                # Fallback: select all and type.
-                await d.press_chord("Control", "a")
-                await d.type_text(depth_str)
-        except Exception:
-            await d.press_chord("Control", "a")
-            await d.type_text(depth_str)
-        await asyncio.sleep(0.2)
-        await d.press_key("Enter")
-        await asyncio.sleep(0.4)
+        depth_str = await _enter_value(d, parse_mm(depth_mm))
 
-        # Step 4: commit with the green checkmark. Try aria-label first,
-        # fall back to the hardcoded toolbar position.
-        try:
-            check = d.page.locator(
-                'button[aria-label*="check" i], button[title*="check" i]'
-            ).first
-            if await check.count() > 0:
-                await check.click()
-            else:
-                await d.click(294.0, 105.0)
-        except Exception:
-            await d.click(294.0, 105.0)
-        await asyncio.sleep(0.3)
+        # Step 4: commit with the green checkmark. No hardcoded-pixel
+        # fallback — a guessed click here can cancel the feature instead.
+        if not await _commit_dialog(d):
+            shot = await d.screenshot("feature_extrude_failed.png")
+            r = Result(False, "feature.extrude: commit button not found on the extrude dialog", shot)
+            _record("feature.extrude", {"depth_mm": depth_mm}, r)
+            return r
         # Some extrude paths need a second confirm. Shift+Enter
         # dismisses any tooltip without committing the wrong action.
         await d.press_chord("Shift", "Enter")
         await asyncio.sleep(0.5)
 
     shot = await d.screenshot("feature_extrude.png")
-    r = Result(True, f"extrude depth={depth_mm}mm", shot)
-    _record("feature.extrude", {"depth_mm": depth_mm}, r)
+    meta = {"depth_mm": parse_mm(depth_mm)} if depth_mm is not None else {}
+    r = Result(True, f"extrude depth={depth_str}", shot, meta)
+    _record("feature.extrude", meta, r)
     return r
 
 
@@ -1261,20 +1326,16 @@ async def feature_revolve(d: OnshapeDriver, angle_deg: float = 360.0) -> Result:
     except Exception:
         pass
 
-    try:
-        ok_btn = d.page.locator(".ns-dialog-button-ok, .button-ok, button[aria-label*='check' i]").first
-        if await ok_btn.count() > 0 and await ok_btn.is_visible():
-            await ok_btn.click()
-        else:
-            await d.click(294.0, 105.0)
-    except Exception:
-        await d.click(294.0, 105.0)
-    await asyncio.sleep(0.3)
+    if not await _commit_dialog(d):
+        shot = await d.screenshot("feature_revolve_failed.png")
+        r = Result(False, "feature.revolve: commit button not found on the revolve dialog", shot)
+        _record("feature.revolve", {"angle_deg": angle_deg}, r)
+        return r
     await d.press_chord("Shift", "Enter")
     await asyncio.sleep(0.5)
 
     shot = await d.screenshot("feature_revolve.png")
-    r = Result(True, f"revolve angle={angle_deg}deg", shot)
+    r = Result(True, f"revolve angle={angle_deg}deg", shot, {"angle_deg": angle_deg})
     _record("feature.revolve", {"angle_deg": angle_deg}, r)
     return r
 
@@ -1404,11 +1465,11 @@ async def doc_new(d: OnshapeDriver) -> Result:
     Part Studio, which is where sketch + feature tools work.
     """
     try:
-        # Click Create dropdown button at top-left
-        await d.click(75, 70)
+        if not await d.click_text("Create", timeout_ms=5000):
+            return Result(False, "doc.new: 'Create' button not found on the documents page")
         await asyncio.sleep(0.5)
-        # Click "Document..." item
-        await d.click(75, 110)
+        if not await d.click_text("Document", timeout_ms=5000):
+            return Result(False, "doc.new: 'Document' menu item not found under Create")
         await asyncio.sleep(1.0)
         await d.type_text("PartStudio")
         await asyncio.sleep(0.2)

@@ -7,6 +7,8 @@ drift apart.
 
 from __future__ import annotations
 
+import sys
+
 import asyncio
 import hashlib
 import json
@@ -161,7 +163,11 @@ class AgentLoop:
                 step, {"tool": tool, "args": args}, ok=True, elapsed_s=time.monotonic() - t0
             )
             try:
-                action_res = await dispatch(d, tool, args)
+                action_res = await dispatch(d, tool, args, space="px")
+                if hasattr(action_res, "ok") and not action_res.ok:
+                    raise RuntimeError(action_res.note or f"{tool} reported failure")
+                if isinstance(action_res, dict) and action_res.get("ok") is False:
+                    raise RuntimeError(action_res.get("error") or action_res.get("note") or f"{tool} reported failure")
                 if (
                     hasattr(action_res, "meta")
                     and isinstance(action_res.meta, dict)
@@ -173,14 +179,12 @@ class AgentLoop:
                 rec.error = f"{type(e).__name__}: {e}"
             rec.elapsed_s = time.monotonic() - t0
             result.steps.append(rec)
-            if rec.ok:
-                unchanged = 0
             status_str = (
                 f"ERROR {rec.error}"
                 if rec.error
                 else f"{tool}({json.dumps(args, ensure_ascii=False)})"
             )
-            print(f"  step {step}: {status_str} ({rec.elapsed_s:.1f}s)", flush=True)
+            print(f"  step {step}: {status_str} ({rec.elapsed_s:.1f}s)", flush=True, file=sys.stderr)
             # brief beat so the UI has time to paint
             await asyncio.sleep(0.4)
 

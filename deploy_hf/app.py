@@ -10,16 +10,12 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 
 import enum
 if not hasattr(enum, "StrEnum"):
     class StrEnum(str, enum.Enum):
         pass
     enum.StrEnum = StrEnum
-
-# Add src to sys.path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 import gradio as gr
 import subprocess
@@ -47,6 +43,16 @@ from onshape_mcp.server import mcp
 # Disable DNS rebinding check for cloud deployment so ChatGPT and external hosts can connect
 mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
+# This Space drives a browser holding an Onshape session, on a public URL.
+# Set MCP_TOKEN as a Space secret; clients append ?token=... to the SSE URL.
+MCP_TOKEN = os.environ.get("MCP_TOKEN", "")
+if not MCP_TOKEN:
+    raise SystemExit(
+        "MCP_TOKEN is not set. Add it under Settings > Variables and secrets\n"
+        "before starting this Space — without it, anyone who finds the URL can\n"
+        "edit the Onshape documents this Space is logged into."
+    )
+
 
 # ZeroGPU registered handler
 @spaces.GPU
@@ -64,10 +70,12 @@ with gr.Blocks(title="Onshape CAD MCP Server") as demo:
     ---
 
     ### 🔗 Connection Endpoint
-    Copy this SSE endpoint into ChatGPT's **New Plugin / Server URL** dialog:
+    Paste this into ChatGPT's connector dialog, with your token appended:
     ```text
-    https://x-r-1-8-onshape-cad-mcp.hf.space/sse
+    https://x-r-1-8-onshape-cad-mcp.hf.space/sse?token=YOUR_MCP_TOKEN
     ```
+    The token is the `MCP_TOKEN` Space secret. It gates every request —
+    this endpoint drives a live Onshape session.
     """)
     status_btn = gr.Button("Test Server Engine", variant="primary")
     status_out = gr.Textbox(label="Engine Status", interactive=False)
@@ -82,8 +90,12 @@ with gr.Blocks(title="Onshape CAD MCP Server") as demo:
 
 
 if __name__ == "__main__":
+    from onshape_mcp.tunnel import require_token
+
     app, local_url, share_url = demo.launch(prevent_thread_lock=True, ssr_mode=False)
-    sse_app = mcp.sse_app()
-    for route in sse_app.routes:
+    for route in mcp.sse_app().routes:
+        # Both /sse (Route) and /messages (Mount) expose a plain ASGI
+        # callable as .app, so one gate covers each.
+        route.app = require_token(route.app, MCP_TOKEN)
         app.routes.insert(0, route)
     demo.block_thread()

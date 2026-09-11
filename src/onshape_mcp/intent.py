@@ -156,8 +156,14 @@ def parse(text: str) -> Plan | None:
                 actions = [Action("feature.delete", {"name": tgt}) for tgt in targets]
                 return Plan(actions, f"Delete feature(s): {', '.join(targets)}")
 
-    # Deterministic features list intent
-    if any(p in lower for p in ("list features", "show features", "existing features", "get features")):
+    # Deterministic features list intent. Checked before the shape
+    # branches so a read-only query never falls through to the vision
+    # loop (which is slower and needs Gemini authenticated).
+    if re.search(
+        r"\b(list|show|get|what(?:'s| is| are)?|existing|current)\b[^.?]{0,30}"
+        r"\b(features?|sketch(?:es)?|feature tree|part studio)\b",
+        lower,
+    ) and not re.search(r"\b(draw|create|make|add|new|extrude|revolve|delete|remove)\b", lower):
         return Plan([Action("features.list")], "List features in Part Studio")
 
     # Deterministic undo / redo
