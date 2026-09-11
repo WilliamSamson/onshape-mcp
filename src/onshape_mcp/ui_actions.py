@@ -193,6 +193,18 @@ async def sketch_start(
         r = Result(False, f"Onshape did not enter sketch mode on {target_name}", shot)
         _record("sketch.start", {"plane": target_name}, r)
         return r
+    # Turn off constraint badges. Onshape scatters them along the edges it
+    # has just constrained, and a dimension click that lands on a badge
+    # selects the badge instead of the line — which is why dimensioning a
+    # rectangle's top edge kept reporting "nothing selectable".
+    try:
+        box = d.page.get_by_label("Show constraints")
+        if await box.count() > 0 and await box.first.is_checked():
+            await box.first.uncheck()
+            await asyncio.sleep(0.2)
+    except Exception:
+        pass
+
     shot = await d.screenshot("sketch_start.png")
     r = Result(True, f"sketch started on {target_name}", shot, {"plane": target_name})
     _record("sketch.start", {"plane": target_name}, r)
@@ -511,22 +523,28 @@ async def sketch_rectangle(
     # to land a rough rectangle on screen; these dimensions are what makes
     # it the requested size.
     async def _dimension_edge(along: str, value: float) -> bool:
-        """Dimension one edge, retrying at a few points along it.
+        """Dimension one edge, probing perpendicular to it.
 
-        Picking an edge is flaky — whichever attempt runs first tends to
-        miss, so a single fixed point silently left one side undriven.
-        Walking the edge costs one extra click on the rare retry.
+        Driving the first dimension makes Onshape's solver resize the
+        rectangle, so an edge computed before that has moved — measured at
+        ~8px, perpendicular to itself. Sliding along the edge therefore
+        never recovered it; every candidate sat the same distance inside
+        the shape. Probing outward and inward does, and it costs nothing
+        when the first guess is already on the line.
         """
-        for frac in (0.3, 0.55, 0.75):
+        # Stay at 0.3 along the edge: the midpoint sits on the datum axis
+        # that runs through the origin, and clicking there grabs the axis
+        # instead of the rectangle.
+        for offset in (0.0, -8.0, 8.0, -18.0, 18.0, -32.0, 32.0):
             if along == "top":
-                pick = (min_x + dx * frac, min_y)
+                pick = (min_x + dx * 0.3, min_y + offset)
                 label = (pick[0], pick[1] - 45.0)
             else:
-                pick = (min_x, min_y + dy * frac)
+                pick = (min_x + offset, min_y + dy * 0.3)
                 label = (pick[0] - 55.0, pick[1])
             if (await sketch_dimension(d, pick, label, value)).ok:
                 return True
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.3)
         return False
 
     driven: dict[str, bool] = {}
@@ -1222,17 +1240,35 @@ async def sketch_create(
 
     # The commit result was previously discarded, so a sketch that failed
     # to commit still reported ok=True with the dialog left open.
-    ok = exit_res.ok and all(s.get("ok", False) for s in created_shapes)
-    note = (
-        f"Created sketch on {plane} with {len(created_shapes)} shape(s)"
-        if ok
-        else f"Sketch on {plane} incomplete: {exit_res.note}"
-    )
+    shapes_ok = all(s.get("ok", False) for s in created_shapes)
+    ok = exit_res.ok and shapes_ok
+    if ok:
+        note = f"Created sketch on {plane} with {len(created_shapes)} shape(s)"
+    elif exit_res.ok:
+        # The sketch exists and is committed — only a dimension fell short.
+        # Saying "failed" made callers rebuild it from scratch, which is how
+        # one request turned into Sketch 1, Sketch 2, Sketch 3. Name the
+        # feature and tell them to edit it rather than start over.
+        made = all_features[-1] if all_features else "the new sketch"
+        note = (
+            f"Sketch committed on {plane} as '{made}', but not every dimension was "
+            f"driven — some sides are approximate. DO NOT create another sketch; "
+            f"fix this one with onshape_sketch_dimension, or delete it with "
+            f"onshape_feature_delete('{made}') first if you want to retry."
+        )
+    else:
+        note = f"Sketch on {plane} incomplete: {exit_res.note}"
     r = Result(
         ok,
         note,
         shot,
-        {"shapes": created_shapes, "features": all_features, "plane": plane, "name": name},
+        {
+            "shapes": created_shapes,
+            "features": all_features,
+            "plane": plane,
+            "name": name,
+            "sketch_committed": exit_res.ok,
+        },
     )
     _record("sketch.create", {"plane": plane, "shapes_count": len(created_shapes)}, r)
     return r
